@@ -41,9 +41,11 @@ npm run tauri dev
 npm run tauri build
 ```
 
-CLI 通过终端无回显输入密码，不支持把密码放进命令行参数。默认 `cargo run` 运行 CLI；桌面开发使用 `npm run tauri dev`。构建结果位于 `target/release/`，安装器位于 `target/release/bundle/nsis/`。
+CLI 通过终端无回显输入密码，不支持把密码放进命令行参数。默认 `cargo run` 运行 CLI；桌面开发使用 `npm run tauri dev`。桌面程序为 `FoldSentinel.exe`，命令行为 `foldsentinel-cli.exe`，位于 `target/release/`，安装器位于 `target/release/bundle/nsis/`。
 
 核心在 `src/`，桌面桥接在 `src-tauri/`，TypeScript 界面在 `ui/`。未来的大文件流式格式、挂载和驱动必须分别设计与审查，不应改变现有 v1 加密包参数。
+
+Windows CI 会保留安装包和便携包构建产物。手动执行 `./scripts/package.ps1` 可完成构建、打包和 SHA-256 生成，结果位于 `artifacts/`。首版已验证内容及未覆盖场景见 [验证记录](docs/VALIDATION.md)。
 
 ## License
 

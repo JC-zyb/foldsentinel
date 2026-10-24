@@ -6,7 +6,7 @@ use zeroize::Zeroizing;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "foldsentinel",
+    name = "foldsentinel-cli",
     version,
     about = "Windows folder protection CLI"
 )]

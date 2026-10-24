@@ -6,6 +6,12 @@ description = "Open-source Windows folder protection and encrypted vault tooling
 license = "MIT"
 repository = "https://github.com/JC-zyb/foldsentinel"
 readme = "README.md"
+autobins = false
+default-run = "foldsentinel-cli"
+
+[[bin]]
+name = "foldsentinel-cli"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"

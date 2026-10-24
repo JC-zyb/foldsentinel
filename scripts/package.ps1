@@ -13,7 +13,7 @@ try {
     New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
     $version = (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
     $portable = Join-Path $artifactDirectory "FoldSentinel_${version}_windows-x64_portable.zip"
-    $files = @('target/release/FoldSentinel.exe', 'target/release/foldsentinel.exe', 'README.md', 'LICENSE', 'docs/FORMAT.md')
+    $files = @('target/release/FoldSentinel.exe', 'target/release/foldsentinel-cli.exe', 'README.md', 'LICENSE', 'docs/FORMAT.md')
     foreach ($file in $files) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少交付文件: $file" }
     }

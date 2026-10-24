@@ -31,7 +31,11 @@ pub fn encrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
     reject_link(input)?;
     let input = fs::canonicalize(input).context("解析输入路径失败")?;
     let output = output_path(output)?;
-    ensure!(!output.starts_with(&input), "加密包必须保存在源文件夹之外");
+    ensure!(
+        !PathBuf::from(output.to_string_lossy().to_lowercase())
+            .starts_with(PathBuf::from(input.to_string_lossy().to_lowercase())),
+        "加密包必须保存在源文件夹之外"
+    );
     let directory = input.is_dir();
     let plaintext = if directory {
         pack_directory(&input)?
@@ -195,6 +199,7 @@ impl Write for LimitedBuffer {
 
 fn pack_directory(root: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let mut archive = tar::Builder::new(LimitedBuffer(Zeroizing::new(Vec::new())));
+    let mut seen = HashSet::new();
     archive.follow_symlinks(false);
     for (index, entry) in WalkDir::new(root)
         .min_depth(1)
@@ -207,6 +212,10 @@ fn pack_directory(root: &Path) -> Result<Zeroizing<Vec<u8>>> {
         reject_link(entry.path())?;
         let relative = entry.path().strip_prefix(root)?;
         validate_archive_path(relative)?;
+        ensure!(
+            seen.insert(relative.to_string_lossy().to_lowercase()),
+            "文件夹包含 Windows 下重复的路径"
+        );
         if entry.file_type().is_dir() {
             archive.append_dir(relative, entry.path())?;
         } else {
@@ -310,6 +319,44 @@ fn move_new_directory(_source: &Path, _destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_source_and_commit_race_do_not_overwrite_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("large");
+        let output = dir.path().join("output");
+        File::create(&input)
+            .unwrap()
+            .set_len(MAX_PLAINTEXT as u64 + 1)
+            .unwrap();
+        assert!(encrypt_file(&input, &output, "right").is_err());
+        assert!(!output.exists());
+        fs::write(&output, b"keep").unwrap();
+        assert!(write_new_file(&output, b"replace").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep");
+    }
+    #[test]
+    #[cfg(windows)]
+    fn archive_traversal_and_links_do_not_create_output() {
+        for (name, kind) in [
+            ("../outside", tar::EntryType::Regular),
+            ("link", tar::EntryType::Symlink),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = dir.path().join("output");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o600);
+            header.set_entry_type(kind);
+            header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            let mut archive = tar::Builder::new(Vec::new());
+            archive.append(&header, &[][..]).unwrap();
+            let bytes = archive.into_inner().unwrap();
+            assert!(unpack_directory(&bytes, &output).is_err());
+            assert!(!output.exists());
+            assert!(!dir.path().join("outside").exists());
+        }
+    }
     #[test]
     fn binary_and_empty_files_round_trip_without_changing_source() {
         for bytes in [vec![], (0..=255).collect::<Vec<u8>>()] {

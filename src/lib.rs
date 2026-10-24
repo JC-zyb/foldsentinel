@@ -334,6 +334,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn failed_state_save_does_not_change_attributes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state.json");
+        let source = dir.path().join("file.txt");
+        fs::write(&source, b"source").unwrap();
+        let before = attributes::read(&source).unwrap();
+        let mut store = StateStore::load_from(state.clone()).unwrap();
+        store.save().unwrap();
+        let state_before = attributes::read(&state).unwrap();
+        attributes::write(&state, state_before | attributes::READONLY).unwrap();
+        let result = store.protect(&source, ProtectionMode::HiddenReadonly);
+        attributes::write(&state, state_before).unwrap();
+        assert!(result.is_err());
+        assert_eq!(attributes::read(&source).unwrap(), before);
+        assert_eq!(store.entries().count(), 0);
+    }
+
+    #[test]
     fn state_round_trip_uses_versioned_json() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("state.json");
