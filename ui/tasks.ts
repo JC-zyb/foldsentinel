@@ -8,6 +8,17 @@ export const HISTORY_KEY = 'foldsentinel.history.v1';
 const statuses: TaskStatus[] = ['waiting', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'];
 const operations: Operation[] = ['encrypt', 'decrypt', 'verify'];
 
+export function mergeSourcePaths(existing: readonly string[], incoming: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return [...existing, ...incoming].map(path => path.trim()).filter(path => {
+    if (!path) return false;
+    const key = path.replaceAll('/', '\\').replace(/^\\\\\?\\UNC\\/i, '\\\\')
+      .replace(/^\\\\\?\\/, '').replace(/\\+$/, '').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
 export function loadHistory(raw: string | null): Task[] {
   if (!raw) return [];
   const parsed: unknown = JSON.parse(raw);

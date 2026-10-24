@@ -3,7 +3,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
 import { detectLanguage, errorText, failureCode, language, setLanguage, t, type Language, type MessageKey } from './i18n';
-import { HISTORY_KEY, loadHistory, serializeHistory, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
+import { HISTORY_KEY, loadHistory, mergeSourcePaths, serializeHistory, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
 import './style.css';
 
 const LANGUAGE_KEY = 'foldsentinel.language';
@@ -136,9 +136,12 @@ for (const mode of ['encrypt', 'decrypt', 'verify'] as Operation[]) element(`${m
 input('show-password').onchange = () => { const type = input('show-password').checked ? 'text' : 'password'; input('password').type = type; input('confirm-password').type = type; };
 
 function setSources(paths: string[]): void { element<HTMLTextAreaElement>('input-path').value = paths.join('\n'); }
+function appendSources(paths: string[]): void {
+  setSources(mergeSourcePaths(element<HTMLTextAreaElement>('input-path').value.split(/\r?\n/), paths));
+}
 async function chooseSources(folder: boolean): Promise<void> {
   await runUi(async () => {
-    try { const paths = await open({ directory: folder, multiple: true, title: t(folder ? 'pickFolders' : 'pickFiles') }); if (paths) setSources(typeof paths === 'string' ? [paths] : paths); }
+    try { const paths = await open({ directory: folder, multiple: true, title: t(folder ? 'pickFolders' : 'pickFiles') }); if (paths) appendSources(typeof paths === 'string' ? [paths] : paths); }
     catch (error) { console.error(error); showResult('dialogFailed', {}, true); }
   });
 }
@@ -290,6 +293,6 @@ if (isTauri()) {
   void getCurrentWebview().onDragDropEvent(event => {
     const payload = event.payload;
     element('vault-form').classList.toggle('drag-over', payload.type === 'enter' || payload.type === 'over');
-    if (payload.type === 'drop' && !uiBusy) { page = 'vault'; showPage(); setSources(payload.paths); element('input-path').focus(); }
+    if (payload.type === 'drop' && !uiBusy) { page = 'vault'; showPage(); appendSources(payload.paths); element('input-path').focus(); }
   }).catch(error => { console.error(error); showResult('dialogFailed', {}, true); });
 }

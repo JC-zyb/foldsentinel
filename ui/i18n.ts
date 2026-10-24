@@ -13,7 +13,7 @@ export const messages = {
   language: ['界面语言', 'Language'],
   encrypt: ['创建加密包', 'Encrypt'], decrypt: ['恢复加密包', 'Restore'], verify: ['验证加密包', 'Verify'],
   selection: ['选择内容', 'Choose content'],
-  sourceHelp: ['批量选择文件或文件夹，也可拖入窗口。最多排队 100 项；每个任务上限 1 TiB / 100,000 个条目。', 'Select multiple files or folders, or drop them here. Up to 100 queued tasks; each task supports 1 TiB / 100,000 entries.'],
+  sourceHelp: ['可分次选择或拖入文件与文件夹，自动追加并去重。最多排队 100 项；每个任务上限 1 TiB / 100,000 个条目。', 'Choose or drop files and folders in batches; new paths are appended without duplicates. Up to 100 queued tasks; each task supports 1 TiB / 100,000 entries.'],
   packageHelp: ['支持 v1、v2 加密包；v1 保留 64 MiB 上限。验证只读取数据，不生成恢复文件。', 'Supports v1 and v2 packages; v1 keeps its 64 MiB limit. Verification reads content without restoring files.'],
   source: ['源路径（每行一个）', 'Source paths (one per line)'],
   sourcePlaceholder: ['输入完整路径，或选择 / 拖入多个文件', 'Enter full paths, choose files, or drop them here'],

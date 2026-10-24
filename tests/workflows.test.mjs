@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskQueue, loadHistory, serializeHistory } from '../ui/tasks.ts';
+import { TaskQueue, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
+
+test('separate selections accumulate files and folders without duplicate Windows paths', () => {
+  const file = String.raw`D:\work\alpha.txt`;
+  const folder = String.raw`D:\work\资料`;
+  const second = String.raw`D:\work\beta.bin`;
+  const firstDrop = mergeSourcePaths([], [file]);
+  const secondDrop = mergeSourcePaths(firstDrop, [folder]);
+  assert.deepEqual(secondDrop, [file, folder]);
+  assert.deepEqual(mergeSourcePaths(secondDrop, ['d:/WORK/ALPHA.txt', `${folder}\\`, second, '']), [file, folder, second]);
+  assert.deepEqual(mergeSourcePaths([`\\\\?\\${file}`], [file]), [`\\\\?\\${file}`]);
+  assert.deepEqual(mergeSourcePaths([String.raw`\\server\share\资料`], [String.raw`\\?\UNC\server\share\资料`]), [String.raw`\\server\share\资料`]);
+  assert.deepEqual(mergeSourcePaths(secondDrop, []), secondDrop);
+  assert.deepEqual(firstDrop, [file]);
+});
 
 test('queue is serial, continues after failures, forgets passwords and reloads interrupted work', async () => {
   let saved = '';
