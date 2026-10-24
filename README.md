@@ -25,7 +25,7 @@
 
 ## 开发与构建
 
-Windows 环境需要 Rust stable（MSVC，至少 1.89）、Visual Studio C++ Build Tools、Windows SDK、Node.js 22.12+ 和 WebView2。桌面依赖仅用于 UI 构建；核心 CLI 可单独构建。
+Windows 环境需要当前 Rust stable（MSVC）、Visual Studio C++ Build Tools、Windows SDK、Node.js 22.12+ 和 WebView2。依赖版本锁定于 Cargo.lock 和 package-lock.json；桌面依赖仅用于 UI 构建，核心 CLI 可单独构建。
 
 ```powershell
 cargo run -- state-path
