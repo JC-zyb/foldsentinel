@@ -1,0 +1,10 @@
+[package]
+name = "foldsentinel"
+version = "0.1.0"
+edition = "2024"
+description = "Open-source Windows folder protection and encrypted vault tooling."
+license = "MIT"
+repository = "https://github.com/JC-zyb/foldsentinel"
+readme = "README.md"
+
+[dependencies]
