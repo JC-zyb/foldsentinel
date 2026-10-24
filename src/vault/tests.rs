@@ -15,6 +15,12 @@ fn round_trip(bytes: &[u8]) {
     let before = fs::read_dir(dir.path()).unwrap().count();
     let verified = verify_with_control(&output, "test", &control(dir.path())).unwrap();
     assert_eq!(verified.output_bytes, bytes.len() as u64);
+    let inspection = inspect_with_control(&output, "test", &control(dir.path())).unwrap();
+    assert_eq!(inspection.preview.format_version, 2);
+    assert_eq!(inspection.preview.file_count, 1);
+    assert_eq!(inspection.preview.content_bytes, bytes.len() as u64);
+    assert_eq!(inspection.preview.entries[0].size, bytes.len() as u64);
+    assert!(inspection.preview.entries[0].path.is_none());
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), before);
     decrypt_with_control(&output, &restored, "test", &control(dir.path())).unwrap();
     assert_eq!(fs::read(restored).unwrap(), bytes);
@@ -59,9 +65,37 @@ fn actual_v01_release_fixtures_remain_readable() {
         let verified =
             verify_with_control(&input, "compatibility-test-only", &control(dir.path())).unwrap();
         assert_eq!(verified.directory, folder);
+        let inspected =
+            inspect_with_control(&input, "compatibility-test-only", &control(dir.path())).unwrap();
+        assert_eq!(inspected.preview.format_version, 1);
+        assert_eq!(
+            inspected.preview.content_bytes,
+            b"FoldSentinel v0.1 compatibility\n".len() as u64
+        );
+        assert_eq!(inspected.preview.file_count, 1);
+        if folder {
+            assert!(
+                inspected
+                    .preview
+                    .entries
+                    .iter()
+                    .any(|entry| entry.path.as_deref() == Some("empty") && entry.directory)
+            );
+            assert!(
+                inspected
+                    .preview
+                    .entries
+                    .iter()
+                    .any(|entry| entry.path.as_deref() == Some("内容.txt") && !entry.directory)
+            );
+        } else {
+            assert_eq!(inspected.preview.entries.len(), 1);
+            assert!(inspected.preview.entries[0].path.is_none());
+        }
         assert!(!dir.path().join("jobs").exists());
         let error = verify_with_control(&input, "wrong", &control(dir.path())).unwrap_err();
         assert_eq!(error_code(&error), ErrorCode::Authentication);
+        assert!(inspect_with_control(&input, "wrong", &control(dir.path())).is_err());
         let report = decrypt_with_control(
             &input,
             &output,
@@ -81,6 +115,100 @@ fn actual_v01_release_fixtures_remain_readable() {
             b"FoldSentinel v0.1 compatibility\n"
         );
     }
+}
+
+#[test]
+fn inspection_is_bounded_and_still_authenticates_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("many.fse");
+    for malformed in [false, true] {
+        let count = MAX_PREVIEW_ENTRIES + 3;
+        let mut archive = tar::Builder::new(Vec::new());
+        for index in 0..count {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o600);
+            header.set_entry_type(if malformed && index == count - 1 {
+                tar::EntryType::Symlink
+            } else {
+                tar::EntryType::Regular
+            });
+            header.set_cksum();
+            archive
+                .append_data(&mut header, format!("条目-{index}.txt"), &[][..])
+                .unwrap();
+        }
+        let bytes = archive.into_inner().unwrap();
+        let mut header = [0; HEADER_LEN];
+        header[..8].copy_from_slice(MAGIC);
+        header[8] = 2;
+        header[9] = 1;
+        header[33] = 20;
+        header[42..46].copy_from_slice(&(count as u32).to_le_bytes());
+        let mut writer = EncryptWriter::new(
+            File::create(&input).unwrap(),
+            "test",
+            header,
+            control(dir.path()),
+        )
+        .unwrap();
+        writer.write_all(&bytes).unwrap();
+        writer.finish().unwrap();
+        let inspection = inspect_with_control(&input, "test", &control(dir.path()));
+        if malformed {
+            assert!(inspection.is_err(), "展示上限之后的非法条目仍须拒绝");
+            continue;
+        }
+        let inspection = inspection.unwrap();
+        assert_eq!(inspection.preview.total_entries, count);
+        assert_eq!(inspection.preview.entries.len(), MAX_PREVIEW_ENTRIES);
+        assert_eq!(inspection.preview.content_bytes, 0);
+        assert!(inspection.preview.truncated);
+        let mut damaged = fs::read(&input).unwrap();
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(&input, &damaged).unwrap();
+        assert!(inspect_with_control(&input, "test", &control(dir.path())).is_err());
+        fs::write(&input, &damaged[..damaged.len() - 1]).unwrap();
+        assert!(inspect_with_control(&input, "test", &control(dir.path())).is_err());
+    }
+    let cancelled = control(dir.path());
+    assert!(cancelled.cancel());
+    assert_eq!(
+        error_code(&inspect_with_control(&input, "test", &cancelled).unwrap_err()),
+        ErrorCode::Cancelled
+    );
+    assert!(!dir.path().join("jobs").exists());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn inspection_handles_empty_folders_and_cancellation_without_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("empty");
+    let sealed = dir.path().join("empty.fse");
+    fs::create_dir(&source).unwrap();
+    encrypt_with_control(&source, &sealed, "test", &control(dir.path())).unwrap();
+    let before = fs::read_dir(dir.path()).unwrap().count();
+    let inspection = inspect_with_control(&sealed, "test", &control(dir.path())).unwrap();
+    assert!(inspection.report.directory);
+    assert_eq!(inspection.preview.total_entries, 0);
+    assert_eq!(inspection.preview.content_bytes, 0);
+    assert!(inspection.preview.entries.is_empty());
+    let token = Arc::new(Mutex::new(None::<Control>));
+    let captured = token.clone();
+    let registry = dir.path().join("preview-jobs");
+    let c = Control::with_recovery_dir(registry.clone(), move |p| {
+        assert!(p.current.is_empty());
+        if p.phase == "checking" {
+            captured.lock().unwrap().as_ref().unwrap().cancel();
+        }
+    });
+    *token.lock().unwrap() = Some(c.clone());
+    let result = inspect_with_control(&sealed, "test", &c);
+    token.lock().unwrap().take();
+    assert_eq!(error_code(&result.unwrap_err()), ErrorCode::Cancelled);
+    assert!(!registry.exists());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), before);
 }
 
 #[test]
@@ -104,6 +232,42 @@ fn v2_folder_round_trip_and_progress() {
             .directory
     );
     let output = dir.path().join("restored");
+    let preview_events = Arc::new(Mutex::new(Vec::new()));
+    let preview_capture = preview_events.clone();
+    let preview_control = Control::with_recovery_dir(dir.path().join("preview-jobs"), move |p| {
+        preview_capture.lock().unwrap().push(p);
+    });
+    let inspection = inspect_with_control(&sealed, "test", &preview_control).unwrap();
+    assert!(
+        preview_events
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|p| p.current.is_empty())
+    );
+    assert!(!dir.path().join("preview-jobs").exists());
+    assert_eq!(inspection.preview.format_version, 2);
+    assert_eq!(inspection.preview.total_entries, 3);
+    assert_eq!(inspection.preview.file_count, 2);
+    assert_eq!(inspection.preview.directory_count, 1);
+    assert_eq!(
+        inspection.preview.content_bytes,
+        (stream::CHUNK + 13 + 9) as u64
+    );
+    assert!(
+        inspection
+            .preview
+            .entries
+            .iter()
+            .any(|entry| entry.path.as_deref() == Some("空目录") && entry.directory)
+    );
+    assert!(
+        inspection
+            .preview
+            .entries
+            .iter()
+            .any(|entry| entry.path.as_deref() == Some(&long_name) && entry.size == 9)
+    );
     decrypt_with_control(&sealed, &output, "test", &control(dir.path())).unwrap();
     assert!(output.join("空目录").is_dir());
     assert_eq!(fs::read(output.join(long_name)).unwrap(), b"long path");
@@ -175,7 +339,8 @@ fn malformed_archive_metadata_is_rejected_without_reading_attacker_sized_bodies(
             header.set_cksum();
             let mut reader = HeaderOnly(std::io::Cursor::new(header.as_bytes().to_vec()));
             assert!(
-                process_directory(&mut reader, None, Some((0, 1)), &control(dir.path())).is_err()
+                process_directory(&mut reader, None, Some((0, 1)), &control(dir.path()), None)
+                    .is_err()
             );
         }
     }
@@ -198,7 +363,14 @@ fn malformed_archive_metadata_is_rejected_without_reading_attacker_sized_bodies(
             .unwrap();
         let bytes = archive.into_inner().unwrap();
         assert!(
-            process_directory(&mut &bytes[..], None, Some((0, 1)), &control(dir.path())).is_err()
+            process_directory(
+                &mut &bytes[..],
+                None,
+                Some((0, 1)),
+                &control(dir.path()),
+                None
+            )
+            .is_err()
         );
     }
 }
@@ -396,7 +568,14 @@ fn verification_rejects_archive_file_parent_conflicts() {
         }
         let source = archive.into_inner().unwrap();
         assert!(
-            process_directory(&mut &source[..], None, Some((0, 2)), &control(dir.path())).is_err()
+            process_directory(
+                &mut &source[..],
+                None,
+                Some((0, 2)),
+                &control(dir.path()),
+                None
+            )
+            .is_err()
         );
     }
 }

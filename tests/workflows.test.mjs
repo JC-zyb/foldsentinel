@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
+import { previewPage, PREVIEW_PAGE_SIZE } from '../ui/preview.ts';
 
 test('separate selections accumulate files and folders without duplicate Windows paths', () => {
   const file = String.raw`D:\work\alpha.txt`;
@@ -113,4 +114,29 @@ test('language selection and interpolation contracts match in both catalogs', ()
     const placeholders = value => [...value.matchAll(/\{([^}]+)\}/g)].map(m => m[1]).sort();
     assert.deepEqual(placeholders(zh), placeholders(en), key);
   }
+});
+
+test('preview paging is bounded, clamps indices and handles empty folders', () => {
+  const entries = Array.from({ length: PREVIEW_PAGE_SIZE + 3 }, (_, i) => ({ path: `资料/${i}.txt`, directory: false, size: i }));
+  const preview = { entries, total_entries: 1003, file_count: 1003, directory_count: 0, content_bytes: 0, format_version: 2, truncated: true };
+  assert.equal(previewPage(preview, 0).entries.length, PREVIEW_PAGE_SIZE);
+  assert.deepEqual(previewPage(preview, 100), { page: 1, pages: 2, entries: entries.slice(PREVIEW_PAGE_SIZE) });
+  assert.equal(previewPage(preview, -1).page, 0);
+  assert.equal(previewPage(preview, NaN).page, 0);
+  assert.equal(previewPage(preview, 0.9).page, 0);
+  assert.deepEqual(previewPage({ ...preview, entries: [] }, 10), { page: 0, pages: 1, entries: [] });
+});
+
+test('v0.4 task descriptors survive upgrade while preview contents are never persisted', () => {
+  const prior = ['succeeded', 'failed', 'cancelled', 'waiting', 'running'].map((status, index) => ({
+    id: `v04-${index}`, input: `D:\\资料\\${index}.fse`, output: null, operation: 'verify', status,
+    createdAt: 1234 + index, endedAt: index < 3 ? 5678 + index : undefined, batchId: 'v04-existing-batch',
+    code: status === 'failed' ? 'authentication' : undefined, preview: { entries: [{ path: 'sensitive-name.txt' }] }
+  }));
+  const loaded = loadHistory(JSON.stringify(prior));
+  assert.deepEqual(loaded.map(task => task.status), ['succeeded', 'failed', 'cancelled', 'interrupted', 'interrupted']);
+  loaded.forEach((task, i) => { assert.equal(task.batchId, prior[i].batchId); assert.equal(task.input, prior[i].input); assert.equal(task.createdAt, prior[i].createdAt); });
+  assert.equal(loaded[1].code, 'authentication');
+  assert.equal(serializeHistory(loaded).includes('sensitive-name'), false);
+  assert.equal(serializeHistory(loaded).includes('preview'), false);
 });

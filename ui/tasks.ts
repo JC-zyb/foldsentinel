@@ -3,7 +3,7 @@ export type TaskStatus = 'waiting' | 'running' | 'succeeded' | 'failed' | 'cance
 export interface Plan { input: string; output: string | null; operation: Operation }
 export interface Task extends Plan { id: string; status: TaskStatus; createdAt: number; endedAt?: number; code?: string; batchId?: string }
 export interface Progress { phase: string; completed: number; total: number; current: string }
-export interface VaultReport { input_bytes: number; output_bytes: number; directory: boolean }
+export interface VaultReport { input_bytes: number; output_bytes: number; directory: boolean; preview?: import('./preview').PackagePreview }
 export const HISTORY_KEY = 'foldsentinel.history.v1';
 export const MAX_SOURCES = 200;
 const statuses: TaskStatus[] = ['waiting', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'];

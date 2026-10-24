@@ -1,0 +1,32 @@
+{
+  "baseline_worker_sha256": "b36f820b22bce631dc7a56fcc705b273d732fc80726a2bd81034f7b039b8de5b",
+  "checks": [
+    {
+      "active_lock_recognized": true,
+      "no_committed_output": true,
+      "old_journal_readable": true,
+      "operation": "encrypt",
+      "owned_cleanup": true,
+      "real_old_worker_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "active_lock_recognized": true,
+      "no_committed_output": true,
+      "old_journal_readable": true,
+      "operation": "decrypt",
+      "owned_cleanup": true,
+      "real_old_worker_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    }
+  ],
+  "limitations": [
+    "Caller must record the old worker source revision separately.",
+    "Isolated core journal compatibility; not an NSIS install or clean Windows VM test."
+  ],
+  "passed": true,
+  "schema_version": 1,
+  "version": "0.5.0"
+}

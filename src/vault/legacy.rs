@@ -95,6 +95,16 @@ pub(super) fn decode(
     password: &str,
     control: &super::Control,
 ) -> Result<VaultReport> {
+    decode_with_preview(input, output, password, control, None)
+}
+
+pub(super) fn decode_with_preview(
+    input: &Path,
+    output: Option<&Path>,
+    password: &str,
+    control: &super::Control,
+    preview: Option<&mut super::preview::PreviewBuilder>,
+) -> Result<VaultReport> {
     validate_password(password)?;
     let output = output.map(output_path).transpose()?;
     control.check()?;
@@ -159,8 +169,14 @@ pub(super) fn decode(
     }
     if directory {
         // 验证和恢复共用有界 raw tar 解析器。
-        super::process_directory(&mut &plaintext[..], output.as_deref(), None, control)
-            .context(super::ErrorCode::InvalidPackage)?;
+        super::process_directory(
+            &mut &plaintext[..],
+            output.as_deref(),
+            None,
+            control,
+            preview,
+        )
+        .context(super::ErrorCode::InvalidPackage)?;
     } else if let Some(output) = output {
         let mut file = OpenOptions::new()
             .write(true)
@@ -173,6 +189,8 @@ pub(super) fn decode(
                 .context(super::ErrorCode::WriteFailed)?;
         }
         file.sync_all().context(super::ErrorCode::WriteFailed)?;
+    } else if let Some(preview) = preview {
+        preview.record(None, false, plaintext.len() as u64);
     }
     Ok(VaultReport {
         input_bytes: payload.len(),
@@ -335,6 +353,7 @@ fn unpack_directory(bytes: &[u8], output: &Path) -> Result<()> {
         Some(&destination),
         None,
         &super::Control::new(|_| {})?,
+        None,
     )?;
     move_new_directory(&destination, output)?;
     Ok(())

@@ -1,6 +1,7 @@
 mod control;
 mod error;
 mod legacy;
+mod preview;
 pub mod recovery;
 mod space;
 mod stream;
@@ -10,6 +11,7 @@ use anyhow::{Context, Result, ensure};
 pub use control::{Control, Progress};
 pub use error::{ErrorCode, error_code};
 pub(crate) use legacy::reject_link;
+pub use preview::{MAX_PREVIEW_ENTRIES, PackagePreview, PreviewEntry, VaultInspection};
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -40,6 +42,26 @@ pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
 
 /// 只读验证：完整认证内容及归档结构，不创建临时明文或输出文件。
 pub fn verify_with_control(input: &Path, password: &str, control: &Control) -> Result<VaultReport> {
+    verify_content(input, password, control, None).map(|(report, _)| report)
+}
+
+/// 完整认证成功后返回有界元数据；不创建输出、临时明文或任务登记。
+pub fn inspect_with_control(
+    input: &Path,
+    password: &str,
+    control: &Control,
+) -> Result<VaultInspection> {
+    let mut preview = preview::PreviewBuilder::default();
+    let (report, version) = verify_content(input, password, control, Some(&mut preview))?;
+    Ok(preview.finish(version, report))
+}
+
+fn verify_content(
+    input: &Path,
+    password: &str,
+    control: &Control,
+    mut preview: Option<&mut preview::PreviewBuilder>,
+) -> Result<(VaultReport, u8)> {
     legacy::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
@@ -49,15 +71,18 @@ pub fn verify_with_control(input: &Path, password: &str, control: &Control) -> R
     let mut magic = [0; 8];
     source.read_exact(&mut magic)?;
     if &magic == b"FSEAL001" {
-        let report = legacy::decode(&input, None, password, control)?;
+        let report = legacy::decode_with_preview(&input, None, password, control, preview)?;
         control.check()?;
         control.begin_commit()?;
         control.phase("completed", "");
-        return Ok(VaultReport {
-            input_bytes: report.input_bytes as u64,
-            output_bytes: report.output_bytes as u64,
-            directory: report.directory,
-        });
+        return Ok((
+            VaultReport {
+                input_bytes: report.input_bytes as u64,
+                output_bytes: report.output_bytes as u64,
+                directory: report.directory,
+            },
+            1,
+        ));
     }
     ensure!(&magic == MAGIC, ErrorCode::UnsupportedFormat);
     let mut header = [0; HEADER_LEN];
@@ -76,20 +101,26 @@ pub fn verify_with_control(input: &Path, password: &str, control: &Control) -> R
     control.phase("checking", "");
     let directory = header[9] == 1;
     if directory {
-        process_directory(&mut stream, None, Some((size, entries)), control)
+        process_directory(&mut stream, None, Some((size, entries)), control, preview)
             .context(ErrorCode::InvalidPackage)?;
     } else {
         let copied = std::io::copy(&mut stream.by_ref().take(size + 1), &mut std::io::sink())?;
         ensure!(copied == size, ErrorCode::InvalidPackage);
+        if let Some(preview) = preview.as_mut() {
+            preview.record(None, false, size);
+        }
     }
     control.check()?;
     control.begin_commit()?;
     control.phase("completed", "");
-    Ok(VaultReport {
-        input_bytes: wire_size,
-        output_bytes: size,
-        directory,
-    })
+    Ok((
+        VaultReport {
+            input_bytes: wire_size,
+            output_bytes: size,
+            directory,
+        },
+        2,
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -397,6 +428,7 @@ pub fn decrypt_with_control(
                 Some(&job.payload()),
                 Some((size, entries)),
                 control,
+                None,
             )
             .context(ErrorCode::InvalidPackage)?;
         } else {
@@ -444,6 +476,7 @@ fn process_directory(
     destination: Option<&Path>,
     expected: Option<(u64, usize)>,
     control: &Control,
+    mut preview: Option<&mut preview::PreviewBuilder>,
 ) -> Result<()> {
     if let Some(destination) = destination {
         fs::create_dir(destination).context(ErrorCode::WriteFailed)?;
@@ -497,7 +530,9 @@ fn process_directory(
         if kind.is_file() {
             files.push(key);
         }
-        control.current(name);
+        if preview.is_none() {
+            control.current(name);
+        }
         let path = destination.map(|destination| destination.join(&relative));
         if kind.is_dir() {
             ensure!(entry.size() == 0, "目录条目携带数据");
@@ -523,6 +558,9 @@ fn process_directory(
                 std::io::copy(&mut entry, &mut std::io::sink())?
             };
             ensure!(copied == entry.size(), "归档文件截断");
+        }
+        if let Some(preview) = preview.as_mut() {
+            preview.record(Some(name), kind.is_dir(), entry.size());
         }
     }
     for file in files {

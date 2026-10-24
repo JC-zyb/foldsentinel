@@ -34,14 +34,14 @@ jobs:
         run: ./scripts/validate-volume.ps1 -Report ./v04-io-windows-x64.json
       - run: ./scripts/package.ps1
       - name: Installer upgrade and uninstall smoke
-        run: ./scripts/validate-install.ps1 -Report ./v04-install-windows-x64.json
+        run: ./scripts/validate-install.ps1 -Report ./v05-install-windows-x64.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: FoldSentinel-validation
           path: |
             v04-io-windows-x64.json
-            v04-install-windows-x64.json
+            v05-install-windows-x64.json
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:

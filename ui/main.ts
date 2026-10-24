@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { detectLanguage, errorText, failureCode, language, setLanguage, t, type Language, type MessageKey } from './i18n';
 import { batchSummary, HISTORY_KEY, MAX_SOURCES, inspectSources, loadHistory, mergeSourcePaths, serializeHistory, sourceKey, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
+import { previewPage, type PackagePreview } from './preview';
 import './style.css';
 
 const LANGUAGE_KEY = 'foldsentinel.language';
@@ -24,19 +25,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section id="vault-panel">
       <div id="recovery-alert" class="notice recovery-alert" role="status" hidden><p id="recovery-alert-text"></p><button id="review-recovery" type="button" class="secondary" ${text('reviewRecovery')}></button></div>
       <div class="segmented" role="group"><button id="encrypt-tab" aria-pressed="true" ${text('encrypt')}></button><button id="decrypt-tab" aria-pressed="false" ${text('decrypt')}></button><button id="verify-tab" aria-pressed="false" ${text('verify')}></button></div>
-      <div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div>
       <form id="vault-form" class="panel"><fieldset id="vault-fields"><legend class="sr-only" ${text('vault')}></legend>
         <div class="section-heading"><span class="step">1</span><div><h2 ${text('selection')}></h2><p id="source-help"></p></div></div>
-        <label for="input-path" ${text('source')}></label><textarea id="input-path" rows="3" required spellcheck="false" autocomplete="off"></textarea>
-        <div class="selection-actions"><button id="pick-file" type="button" class="secondary" ${text('pickFiles')}></button><button id="pick-folder" type="button" class="secondary" ${text('pickFolders')}></button></div>
+        <div class="source-picker"><p id="drop-help"></p><div class="selection-actions"><button id="pick-file" type="button" class="secondary" ${text('pickFiles')}></button><button id="pick-folder" type="button" class="secondary" ${text('pickFolders')}></button></div></div>
+        <details id="manual-sources" class="manual-sources"><summary ${text('manualSources')}></summary><label for="input-path" ${text('source')}></label><textarea id="input-path" rows="3" spellcheck="false" autocomplete="off"></textarea></details>
         <section id="draft" class="draft" hidden><div class="records-heading"><strong id="draft-count" role="status"></strong><button id="clear-sources" type="button" class="text-button" ${text('clearSources')}></button></div><ul id="source-list"></ul><p id="source-warning" class="source-warning" role="status"></p></section>
         <div id="output-fields"><label for="output-path" ${text('outputDirectory')}></label><div class="path-row"><input id="output-path" spellcheck="false" autocomplete="off"><button id="pick-output" type="button" class="secondary" ${text('chooseDirectory')}></button></div><p class="field-help" ${text('outputHelp')}></p></div>
         <div class="divider"></div><div class="section-heading"><span class="step">2</span><div><h2 ${text('passwordTitle')}></h2><p ${text('passwordHelp')}></p></div></div>
         <div class="password-grid"><div><label for="password" ${text('password')}></label><input id="password" type="password" required maxlength="256" autocomplete="new-password"></div><div id="confirm-field"><label for="confirm-password" ${text('confirmPassword')}></label><input id="confirm-password" type="password" required maxlength="256" autocomplete="new-password"></div></div>
         <label class="checkbox"><input id="show-password" type="checkbox"><span ${text('showPassword')}></span></label><div class="notice" id="vault-notice"></div>
-        <div class="form-footer"><span>Argon2id + AES-256-GCM</span><button class="primary" type="submit" ${text('add')}></button></div>
+        <div class="divider"></div><div class="form-footer"><div class="section-heading"><span class="step">3</span><div><h2 ${text('reviewTitle')}></h2><p id="review-help"></p></div></div><button class="primary" type="submit" ${text('add')}></button></div>
+        <details class="usage-details"><summary ${text('usageDetails')}></summary><p class="field-help" ${text('formatLimits')}></p><p class="field-help" ${text('passwordMemory')}></p></details>
       </fieldset></form>
-      <section class="records queue"><div class="records-heading"><h2 ${text('queue')}></h2><button id="clear-history" class="text-button" ${text('clearHistory')}></button></div><p class="field-help" ${text('queueHelp')}></p><div class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul></section>
+      <section id="package-preview" class="panel preview-panel" hidden aria-labelledby="preview-title"><div class="records-heading"><h2 id="preview-title" ${text('previewTitle')}></h2><button id="close-preview" type="button" class="text-button" ${text('closePreview')}></button></div><p id="preview-package" class="preview-package"></p><p class="notice" ${text('previewAuthenticated')}></p><p id="preview-summary" class="preview-summary"></p><p id="preview-limit" class="notice" hidden></p><p id="preview-empty" class="field-help" hidden ${text('emptyPackage')}></p><div class="preview-table-scroll" tabindex="0" role="region" aria-labelledby="preview-title"><table id="preview-table"><caption class="sr-only" ${text('previewTitle')}></caption><thead><tr><th scope="col" ${text('previewPath')}></th><th scope="col" ${text('previewType')}></th><th scope="col" ${text('previewSize')}></th></tr></thead><tbody id="preview-entries"></tbody></table></div><div class="preview-pagination"><span id="preview-page" role="status"></span><div class="selection-actions"><button id="preview-previous" type="button" class="secondary" ${text('previousPage')}></button><button id="preview-next" type="button" class="secondary" ${text('nextPage')}></button><button id="preview-restore" type="button" class="primary" ${text('prepareRestore')}></button></div></div><p class="field-help" ${text('previewPrivacy')}></p></section>
+      <section class="records queue"><h2 ${text('queue')}></h2><div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div><div class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul><details id="history-panel" class="history-panel"><summary id="history-summary"></summary><div class="records-heading"><p class="field-help" ${text('queueHelp')}></p><button id="clear-history" type="button" class="text-button" ${text('clearHistory')}></button></div><ul id="history-list"></ul></details></section>
       <section class="records recovery"><div class="records-heading"><h2 ${text('jobs')}></h2><button id="refresh-jobs" class="text-button" ${text('refreshJobs')}></button></div><p class="field-help" ${text('jobsHelp')}></p><ul id="job-list"></ul></section>
     </section>
     <section id="attributes-panel" hidden>
@@ -72,10 +74,13 @@ let jobs: RecoveryEntry[] = [];
 let diagnostic: DiagnosticInput | null = null;
 let diagnosticText = '';
 let diagnosticStatus: MessageKey | null = null;
+let packagePreview: { input: string; value: PackagePreview } | null = null;
+let previewPageIndex = 0;
 let snapshot: Snapshot | null = null;
 let initialTasks: Task[] = [];
 try { initialTasks = loadHistory(localStorage.getItem(HISTORY_KEY)); }
 catch { historyBroken = true; startupError = 'historyInvalid'; }
+let lastFailureId = [...initialTasks].reverse().find(task => task.status === 'failed')?.id;
 const queue = new TaskQueue(initialTasks, tasks => {
   try { localStorage.setItem(HISTORY_KEY, serializeHistory(tasks)); }
   catch { throw new Error('storage_failed'); }
@@ -134,6 +139,7 @@ function syncControls(): void {
   element<HTMLButtonElement>('start-queue').disabled = uiBusy || queue.running || !queue.tasks.some(t => t.status === 'waiting');
   element<HTMLButtonElement>('pause-queue').disabled = !queue.running;
   element<HTMLButtonElement>('retry-batch').disabled = uiBusy || !queue.tasks.some(task => task.batchId === [...queue.tasks].reverse().find(item => item.batchId)?.batchId && task.status === 'failed');
+  element<HTMLButtonElement>('preview-restore').disabled = uiBusy || queue.running;
   for (const mode of ['encrypt', 'decrypt', 'verify']) element<HTMLButtonElement>(`${mode}-tab`).disabled = uiBusy;
   element('activity').textContent = !isTauri() ? t('preview') : queue.running || uiBusy ? t('working') : t('ready');
 }
@@ -150,18 +156,20 @@ function clearPasswords(): void {
 function modeLabels(): void {
   for (const mode of ['encrypt', 'decrypt', 'verify']) { element(`${mode}-tab`).classList.toggle('active', operation === mode); element(`${mode}-tab`).setAttribute('aria-pressed', String(operation === mode)); }
   element('source-help').textContent = t(operation === 'encrypt' ? 'sourceHelp' : 'packageHelp');
+  element('drop-help').textContent = t(operation === 'encrypt' ? 'dropHelp' : 'packageDropHelp');
+  element('review-help').textContent = t(operation === 'verify' ? 'verifyReviewHelp' : 'reviewHelp');
   element('pick-folder').hidden = operation !== 'encrypt'; element('output-fields').hidden = operation === 'verify';
   element('confirm-field').hidden = operation !== 'encrypt'; input('confirm-password').required = operation === 'encrypt';
   input('password').autocomplete = operation === 'encrypt' ? 'new-password' : 'current-password';
   element('vault-notice').textContent = t(operation === 'verify' ? 'verifyNotice' : 'notice');
 }
-function setMode(mode: Operation): void { operation = mode; clearPasswords(); modeLabels(); }
+function setMode(mode: Operation): void { if (operation !== mode) { operation = mode; clearPasswords(); clearPreview(); } modeLabels(); }
 function translate(): void {
   document.querySelectorAll<HTMLElement>('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n as MessageKey); });
   element<HTMLSelectElement>('language').value = language;
   element<HTMLTextAreaElement>('input-path').placeholder = t('sourcePlaceholder'); input('output-path').placeholder = t('outputPlaceholder');
   element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
-  modeLabels(); renderSources(); renderTasks(); renderJobs(); renderRecords(); renderResult(); renderDiagnostic(); syncControls(); if (progress) updateProgress(progress);
+  modeLabels(); renderSources(); renderTasks(); renderJobs(); renderRecords(); renderResult(); renderDiagnostic(); renderPreview(); syncControls(); if (progress) updateProgress(progress);
 }
 element<HTMLSelectElement>('language').onchange = () => {
   const next = element<HTMLSelectElement>('language').value as Language;
@@ -171,7 +179,7 @@ element<HTMLSelectElement>('language').onchange = () => {
 for (const mode of ['encrypt', 'decrypt', 'verify'] as Operation[]) element(`${mode}-tab`).onclick = () => setMode(mode);
 input('show-password').onchange = () => { const type = input('show-password').checked ? 'text' : 'password'; input('password').type = type; input('confirm-password').type = type; };
 
-function setSources(paths: string[]): void { element<HTMLTextAreaElement>('input-path').value = paths.join('\n'); renderSources(); }
+function setSources(paths: string[]): void { clearPreview(); element<HTMLTextAreaElement>('input-path').value = paths.join('\n'); renderSources(); }
 function appendSources(paths: string[]): void {
   const before = inspectSources(element<HTMLTextAreaElement>('input-path').value).paths;
   const merged = mergeSourcePaths(before, paths);
@@ -188,14 +196,14 @@ function renderSources(): void {
     const item = document.createElement('li'); const label = document.createElement('span'); label.textContent = path;
     const remove = button('removeSource', () => {
       const next = inspectSources(element<HTMLTextAreaElement>('input-path').value).paths.filter(p => sourceKey(p) !== sourceKey(path));
-      setSources(next); element<HTMLTextAreaElement>('input-path').focus();
+      setSources(next); element('pick-file').focus();
     });
     remove.setAttribute('aria-label', t('removePath', { path })); item.append(label, remove); list.append(item);
   }
   element('source-warning').textContent = [draft.duplicates ? t('duplicatesWarning', { n: draft.duplicates }) : '', draft.overlaps.length ? t('overlapWarning') : '', draft.paths.length > MAX_SOURCES ? t('queueLimit') : ''].filter(Boolean).join('\n');
 }
-element('input-path').oninput = renderSources;
-element('clear-sources').onclick = () => { setSources([]); element('input-path').focus(); };
+element('input-path').oninput = () => { clearPreview(); renderSources(); };
+element('clear-sources').onclick = () => { setSources([]); element('pick-file').focus(); };
 async function chooseSources(folder: boolean): Promise<void> {
   await runUi(async () => {
     try { const paths = await open({ directory: folder, multiple: true, title: t(folder ? 'pickFolders' : 'pickFiles') }); if (paths) appendSources(typeof paths === 'string' ? [paths] : paths); }
@@ -213,6 +221,7 @@ element<HTMLFormElement>('vault-form').onsubmit = event => {
   event.preventDefault();
   if (historyBroken) { showResult('historyInvalid', {}, true); return; }
   const draft = inspectSources(element<HTMLTextAreaElement>('input-path').value);
+  if (!draft.paths.length) { showResult('sourcesRequired', {}, true); element('pick-file').focus(); return; }
   if (draft.paths.length > MAX_SOURCES) { showResult('queueLimit', {}, true); return; }
   if (draft.overlaps.length) { showResult('overlapWarning', {}, true); return; }
   if (operation === 'encrypt' && input('password').value !== input('confirm-password').value) { showResult('passwordMismatch', {}, true); input('confirm-password').focus(); return; }
@@ -224,10 +233,39 @@ element<HTMLFormElement>('vault-form').onsubmit = event => {
   });
 };
 function bytes(value: number): string {
-  if (value < 1024) return `${value.toFixed(0)} B`;
+  if (value < 1024) return `${new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(value)} B`;
   const unit = Math.min(Math.floor(Math.log2(value) / 10), 4);
-  return `${(value / 1024 ** unit).toFixed(2)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`;
+  return `${new Intl.NumberFormat(language, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 1024 ** unit)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`;
 }
+function clearPreview(): void { packagePreview = null; previewPageIndex = 0; element('preview-entries').replaceChildren(); element('preview-package').textContent = ''; element('package-preview').hidden = true; }
+function renderPreview(): void {
+  element('package-preview').hidden = packagePreview === null;
+  if (!packagePreview) return;
+  const value = packagePreview.value;
+  const current = previewPage(value, previewPageIndex); previewPageIndex = current.page;
+  const number = (value: number) => new Intl.NumberFormat(language).format(value);
+  element('preview-package').textContent = packagePreview.input.replace(/^\\\\\?\\/, '');
+  element('preview-summary').textContent = t('previewSummary', { version: value.format_version, files: number(value.file_count), folders: number(value.directory_count), size: bytes(value.content_bytes) });
+  element('preview-limit').hidden = !value.truncated;
+  element('preview-limit').textContent = value.truncated ? t('previewTruncated', { total: number(value.total_entries), shown: number(value.entries.length) }) : '';
+  element('preview-empty').hidden = value.total_entries !== 0;
+  element('preview-table').hidden = current.entries.length === 0;
+  const body = element('preview-entries'); body.replaceChildren();
+  for (const entry of current.entries) {
+    const row = document.createElement('tr');
+    for (const content of [entry.path ?? t('singleFileContent'), t(entry.directory ? 'previewFolder' : 'previewFile'), entry.directory ? '—' : bytes(entry.size)]) {
+      const cell = document.createElement('td'); cell.textContent = content; row.append(cell);
+    }
+    body.append(row);
+  }
+  element('preview-page').textContent = t('pageNumber', { page: number(current.page + 1), pages: number(current.pages) });
+  element<HTMLButtonElement>('preview-previous').disabled = current.page === 0;
+  element<HTMLButtonElement>('preview-next').disabled = current.page + 1 === current.pages;
+}
+element('preview-previous').onclick = () => { previewPageIndex--; renderPreview(); };
+element('preview-next').onclick = () => { previewPageIndex++; renderPreview(); };
+element('close-preview').onclick = () => { clearPreview(); element(`${operation}-tab`).focus(); };
+element('preview-restore').onclick = () => { if (packagePreview) refill({ input: packagePreview.input, output: null, operation: 'decrypt' }); };
 function updateProgress(value: Progress): void {
   progress = value;
   element('progress-phase').textContent = cancelling ? t('cancelling') : t(value.phase as MessageKey);
@@ -244,11 +282,19 @@ function updateProgress(value: Progress): void {
   element('activity').textContent = t(['committing', 'completed'].includes(value.phase) ? 'committingHelp' : 'working');
 }
 async function perform(task: Task, password: string): Promise<VaultReport> {
+  clearPreview();
   activeTask = task; cancelling = false; startedAt = performance.now(); element('job-progress').hidden = false;
   element('job-progress').scrollIntoView({ block: 'nearest' });
   const onProgress = new Channel<Progress>(); onProgress.onmessage = value => { if (activeTask?.id === task.id) updateProgress(value); };
   updateProgress({ phase: 'preparing', completed: 0, total: 0, current: '' });
-  try { return await invoke<VaultReport>('vault_operation', { input: task.input, output: task.output ?? '', password, operation: task.operation, onProgress }); }
+  try {
+    const report = await invoke<VaultReport>('vault_operation', { input: task.input, output: task.output ?? '', password, operation: task.operation, onProgress });
+    if (task.operation === 'verify' && report.preview) {
+      packagePreview = { input: task.input, value: report.preview }; renderPreview();
+      element('package-preview').scrollIntoView({ block: 'nearest' });
+    }
+    return report;
+  }
   catch (error) { captureDiagnostic(error, task.operation); throw error; }
   finally { activeTask = null; progress = null; element('job-progress').hidden = true; }
 }
@@ -273,6 +319,7 @@ function refill(plan: Plan): void {
 }
 function renderTasks(): void {
   const list = element('task-list'); list.replaceChildren();
+  const history = element('history-list'); history.replaceChildren();
   const count = (status: string) => queue.tasks.filter(t => t.status === status).length;
   element('queue-summary').textContent = t('queueSummary', { waiting: count('waiting'), running: count('running'), done: count('succeeded'), failed: count('failed'), stopped: count('cancelled') + count('interrupted') });
   const latestBatch = [...queue.tasks].reverse().find(task => task.batchId)?.batchId;
@@ -288,8 +335,19 @@ function renderTasks(): void {
     input('output-path').value = parents.size === 1 ? [...parents][0] : '';
     clearPasswords(); showResult('retryHelp'); input('password').focus();
   };
-  const ordered = [...queue.tasks.filter(t => ['waiting', 'running'].includes(t.status)), ...queue.tasks.filter(t => !['waiting', 'running'].includes(t.status)).reverse()];
-  if (!ordered.length) { const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t('emptyQueue'); list.append(empty); }
+  const pending = queue.tasks.filter(t => ['waiting', 'running'].includes(t.status));
+  const finished = queue.tasks.filter(t => !['waiting', 'running'].includes(t.status)).reverse();
+  const latestFailure = finished.find(task => task.status === 'failed');
+  if (latestFailure && latestFailure.id !== lastFailureId) {
+    element<HTMLDetailsElement>('history-panel').open = true;
+    lastFailureId = latestFailure.id;
+  }
+  element('history-summary').textContent = t('historyCount', { n: new Intl.NumberFormat(language).format(finished.length) });
+  for (const [target, emptyKey] of [[list, 'emptyPending'], [history, 'emptyHistory']] as const) {
+    if ((target === list ? pending : finished).length) continue;
+    const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t(emptyKey); target.append(empty);
+  }
+  const ordered = [...pending, ...finished];
   for (const task of ordered) {
     const item = document.createElement('li'); item.className = 'task-item';
     const detail = document.createElement('div'); const title = document.createElement('strong'); title.textContent = `${t(task.operation)} · ${task.input.replace(/^\\\\\?\\/, '')}`;
@@ -301,7 +359,8 @@ function renderTasks(): void {
     if (task.status === 'waiting') item.append(button('cancel', () => { try { queue.cancelWaiting(task.id); } catch (error) { showError(error); } }));
     else if (['failed', 'cancelled', 'interrupted'].includes(task.status)) item.append(button('retry', () => refill(task)));
     if (task.status === 'succeeded' && task.output) item.append(button('openOutput', () => { void runUi(async () => { await invoke('open_output_folder', { path: task.output }); }); }));
-    list.append(item);
+    if (task.status === 'succeeded' && task.operation === 'verify') item.append(button('inspectAgain', () => refill(task)));
+    (['waiting', 'running'].includes(task.status) ? list : history).append(item);
   }
 }
 
@@ -387,6 +446,6 @@ if (isTauri()) {
   void getCurrentWebview().onDragDropEvent(event => {
     const payload = event.payload;
     element('vault-form').classList.toggle('drag-over', payload.type === 'enter' || payload.type === 'over');
-    if (payload.type === 'drop' && !uiBusy) { page = 'vault'; showPage(); appendSources(payload.paths); element('input-path').focus(); }
+    if (payload.type === 'drop' && !uiBusy) { page = 'vault'; showPage(); appendSources(payload.paths); element('pick-file').focus(); }
   }).catch(error => { console.error(error); showResult('dialogFailed', {}, true); });
 }

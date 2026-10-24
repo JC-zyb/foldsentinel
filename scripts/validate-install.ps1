@@ -13,9 +13,9 @@ $install = Join-Path $owned 'app'
 $registry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FoldSentinel'
 if (Test-Path -LiteralPath $registry) { throw 'runner 已存在 FoldSentinel 安装，拒绝覆盖' }
 New-Item -ItemType Directory -Path $owned | Out-Null
-$oldInstaller = Join-Path $owned 'FoldSentinel_0.3.0_x64-setup.exe'
-Invoke-WebRequest -Uri 'https://github.com/JC-zyb/foldsentinel/releases/download/v0.3.0/FoldSentinel_0.3.0_x64-setup.exe' -OutFile $oldInstaller
-if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne '75f2397dad0ea0b674f4c0e6ea1dc3704c90c784f3779a7689ca1a4c0a2a3c16') { throw 'v0.3.0 基线安装包 SHA-256 不符' }
+$oldInstaller = Join-Path $owned 'FoldSentinel_0.4.0_x64-setup.exe'
+Invoke-WebRequest -Uri 'https://github.com/JC-zyb/foldsentinel/releases/download/v0.4.0/FoldSentinel_0.4.0_x64-setup.exe' -OutFile $oldInstaller
+if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne '0a8a5f8bc796b0ace914254bb298e645c14b5a71d6e313e80366ff288d15de36') { throw 'v0.4.0 基线安装包 SHA-256 不符' }
 
 function Run-Installer([string]$Path, [string]$Arguments) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -WindowStyle Hidden -PassThru
@@ -51,11 +51,11 @@ Start-Smoke $version
 Run-Installer (Join-Path $install 'uninstall.exe') "/S _?=$install"
 if (Test-Path -LiteralPath (Join-Path $install 'FoldSentinel.exe')) { throw '首次卸载后应用 exe 仍存在' }
 Run-Installer $oldInstaller "/S /D=$install"
-Start-Smoke '0.3.0'
+Start-Smoke '0.4.0'
 $markers = @(
-    (Join-Path $env:APPDATA 'FoldSentinel\v04-upgrade-sentinel.txt'),
-    (Join-Path $env:APPDATA 'FoldSentinel\jobs\v04-upgrade-sentinel.txt'),
-    (Join-Path $env:LOCALAPPDATA 'io.github.jc-zyb.foldsentinel\v04-upgrade-sentinel.txt')
+    (Join-Path $env:APPDATA 'FoldSentinel\v05-upgrade-sentinel.txt'),
+    (Join-Path $env:APPDATA 'FoldSentinel\jobs\v05-upgrade-sentinel.txt'),
+    (Join-Path $env:LOCALAPPDATA 'io.github.jc-zyb.foldsentinel\v05-upgrade-sentinel.txt')
 )
 $token = [Guid]::NewGuid().ToString('N')
 foreach ($marker in $markers) {
@@ -71,8 +71,8 @@ Run-Installer $uninstaller "/S _?=$install"
 if (Test-Path -LiteralPath (Join-Path $install 'FoldSentinel.exe')) { throw '卸载后应用 exe 仍存在' }
 foreach ($marker in $markers) { if ([IO.File]::ReadAllText($marker) -ne $token) { throw '默认卸载修改了用户数据哨兵' } }
 $result = [ordered]@{
-    schema_version = 1; version = $version; baseline = '0.3.0'; passed = $true
-    checks = @('baseline_hash', 'install_v04', 'webview_process_v04_fresh', 'uninstall_v04_fresh', 'install_v03', 'webview_process_v03', 'upgrade', 'webview_process_v04', 'user_data_sentinels_retained', 'uninstall', 'default_uninstall_retains_sentinels')
+    schema_version = 1; version = $version; baseline = '0.4.0'; passed = $true
+    checks = @('baseline_hash', 'install_current', 'webview_process_current_fresh', 'uninstall_current_fresh', 'install_baseline', 'webview_process_baseline', 'upgrade', 'webview_process_current', 'user_data_sentinels_retained', 'uninstall', 'default_uninstall_retains_sentinels')
     limitations = @('WebView2 child-process creation is a process smoke check, not interactive UI validation.', 'Sentinels check directory retention, not stored preferences or history semantics.', 'Runner has WebView2; missing-runtime and clean Windows VM checks remain separate.')
 }
 $json = $result | ConvertTo-Json -Depth 5

@@ -17,6 +17,23 @@ struct Snapshot {
 #[derive(Default)]
 struct ActiveJob(Mutex<Option<vault::Control>>);
 
+#[derive(Serialize)]
+struct TaskReport {
+    #[serde(flatten)]
+    report: vault::VaultReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<vault::PackagePreview>,
+}
+
+impl From<vault::VaultReport> for TaskReport {
+    fn from(report: vault::VaultReport) -> Self {
+        Self {
+            report,
+            preview: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct UiError {
     code: vault::ErrorCode,
@@ -71,7 +88,7 @@ async fn vault_operation(
     operation: vault::workflow::Operation,
     on_progress: Channel<vault::Progress>,
     active: State<'_, ActiveJob>,
-) -> Result<vault::VaultReport, UiError> {
+) -> Result<TaskReport, UiError> {
     let password = Zeroizing::new(password);
     let delivery = std::sync::Arc::new(Mutex::new(None::<vault::Control>));
     let delivery_cancel = std::sync::Arc::downgrade(&delivery);
@@ -102,9 +119,18 @@ async fn vault_operation(
         let input = PathBuf::from(input);
         let output = PathBuf::from(output);
         match operation {
-            Operation::Encrypt => vault::encrypt_with_control(&input, &output, &password, &control),
-            Operation::Decrypt => vault::decrypt_with_control(&input, &output, &password, &control),
-            Operation::Verify => vault::verify_with_control(&input, &password, &control),
+            Operation::Encrypt => vault::encrypt_with_control(&input, &output, &password, &control)
+                .map(TaskReport::from),
+            Operation::Decrypt => vault::decrypt_with_control(&input, &output, &password, &control)
+                .map(TaskReport::from),
+            Operation::Verify => {
+                vault::inspect_with_control(&input, &password, &control).map(|inspection| {
+                    TaskReport {
+                        report: inspection.report,
+                        preview: Some(inspection.preview),
+                    }
+                })
+            }
         }
         .map_err(UiError::vault)
     })
