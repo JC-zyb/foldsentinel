@@ -3,12 +3,14 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{Context, Result, bail, ensure};
 use argon2::{Algorithm, Argon2, Params, Version};
+#[cfg(test)]
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+#[cfg(test)]
 use walkdir::WalkDir;
 use zeroize::Zeroizing;
 
@@ -26,6 +28,7 @@ pub struct VaultReport {
 }
 
 /// 源数据从不自动删除。目录归档包括相对名称和空目录。
+#[cfg(test)]
 pub fn encrypt_file(input: &Path, output: &Path, password: &str) -> Result<VaultReport> {
     validate_password(password)?;
     reject_link(input)?;
@@ -114,13 +117,13 @@ pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
     })
 }
 
-fn validate_password(password: &str) -> Result<()> {
+pub(super) fn validate_password(password: &str) -> Result<()> {
     ensure!(!password.is_empty(), "密码不能为空");
     ensure!(password.len() <= 1024, "密码最多 1024 个 UTF-8 字节");
     Ok(())
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+pub(super) fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
     let params =
         Params::new(19_456, 2, 1, Some(32)).map_err(|e| anyhow::anyhow!("KDF 参数错误: {e}"))?;
@@ -141,7 +144,7 @@ fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-fn output_path(path: &Path) -> Result<PathBuf> {
+pub(super) fn output_path(path: &Path) -> Result<PathBuf> {
     ensure!(path.file_name().is_some(), "请指定完整输出名称");
     match fs::symlink_metadata(path) {
         Ok(_) => bail!("输出位置已存在，请选择新名称: {}", path.display()),
@@ -183,7 +186,9 @@ pub(crate) fn reject_link(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 struct LimitedBuffer(Zeroizing<Vec<u8>>);
+#[cfg(test)]
 impl Write for LimitedBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if self.0.len() + bytes.len() > MAX_PLAINTEXT {
@@ -197,6 +202,7 @@ impl Write for LimitedBuffer {
     }
 }
 
+#[cfg(test)]
 fn pack_directory(root: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let mut archive = tar::Builder::new(LimitedBuffer(Zeroizing::new(Vec::new())));
     let mut seen = HashSet::new();
@@ -227,7 +233,7 @@ fn pack_directory(root: &Path) -> Result<Zeroizing<Vec<u8>>> {
     Ok(archive.into_inner()?.0)
 }
 
-fn validate_archive_path(path: &Path) -> Result<()> {
+pub(super) fn validate_archive_path(path: &Path) -> Result<()> {
     ensure!(!path.as_os_str().is_empty(), "归档路径为空");
     for component in path.components() {
         let Component::Normal(name) = component else {

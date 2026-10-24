@@ -22,7 +22,7 @@ try {
     Compress-Archive -LiteralPath $files -DestinationPath $portable -Force
     $installer = Join-Path $projectRoot "target/release/bundle/nsis/FoldSentinel_${version}_x64-setup.exe"
     Copy-Item -LiteralPath $installer -Destination $artifactDirectory -Force
-    $hashes = Get-ChildItem -LiteralPath $artifactDirectory -File | Where-Object { $_.Extension -in '.exe', '.zip' } | Sort-Object Name | ForEach-Object {
+    $hashes = Get-Item -LiteralPath $portable, (Join-Path $artifactDirectory "FoldSentinel_${version}_x64-setup.exe") | Sort-Object Name | ForEach-Object {
         $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
         "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
     }

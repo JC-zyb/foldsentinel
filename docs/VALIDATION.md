@@ -1,8 +1,39 @@
-# 0.1.0 验证记录
+# 验证记录
+
+## 0.2.0 — 2026-10-24
+
+本机为 Windows x64、Rust 1.99 MSVC、Node.js 24。工作区 24 项测试、Rustfmt、Clippy（`-D warnings`）和 TypeScript/Vite 构建通过。除原有属性/状态测试，覆盖：1 MiB 块边界、空文件、Unicode 与 GNU 长名称、v0.1 发布源码生成的两个兼容夹具、头部/标签/密文篡改、错序、截断、追加、tar EOF 仍须验证认证终块、扩展元数据限额、取消加密和恢复、分块中途模拟磁盘满、源目录变化、提交竞争，以及活动锁与最终输出保护。
+
+以下使用 release 核心验证程序，**真实写入完整字节并进行加密/恢复**。每个文件重复一个随机生成的 1 MiB 块，无压缩；不是稀疏文件或仅设置文件长度。源文件和恢复文件均逐一核对 SHA-256。10 GiB 目录由 10 个 1 GiB 文件及中文空目录组成。
+
+| 内容 | 加密 | 恢复 | 核心进程累计峰值工作集 | 结果 |
+|---|---:|---:|---:|---|
+| 4 GiB 文件 | 20.69 s | 33.28 s | 25.92 MiB | SHA-256 一致，源文件保留 |
+| 10 GiB 文件夹 | 65.14 s | 43.83 s | 25.92 MiB | 10 项 SHA-256 一致，中文空目录保留 |
+
+内存使用 Windows `GetProcessMemoryInfo / PeakWorkingSetSize`，阈值为 256 MiB；该数字属于核心验证进程，不包含 WebView2。桌面长任务实测 FoldSentinel 主进程峰值约 52.9 MiB，也不含独立 WebView2 子进程。时间受磁盘、系统缓存及并发负载影响，仅代表本机结果，不是性能保证；1 TiB 是实现限制，未做 1 TiB 实测。
+
+真实强制终止验证：子进程处理 32 MiB 隔离文件，在 payload 写入完成、提交前被父进程终止；最终输出不存在，重新启动后识别中断记录、清理专属 staging、核对源文件，再次加密恢复的 SHA-256 通过。不是用错误返回或 Mock 替代进程终止。
+
+原生窗口验证：显示中断任务 → 清理临时数据并重填路径 → 重新输入测试密码后生成真实加密包；长任务显示已处理字节和百分比，点击取消后返回“未提交输出”，密码清空，磁盘无最终输出、无 staging、无任务记录。长任务取消测试使用单独的 16 GiB 零数据夹具，仅用于交互时长，未作为上述大数据往返或性能数据。
+
+可复现命令（先指定有至少 33 GiB 空间的现有临时盘，JSON 报告路径必须尚不存在）：
+
+```powershell
+cargo build --release --example validate_v02 --locked
+.\target\release\examples\validate_v02.exe large E:\ .\large-result.json
+.\target\release\examples\validate_v02.exe crash E:\ .\crash-result.json
+```
+
+程序仅清理自己创建的随机临时目录，报告保留哈希和测量值。大数据验证不进入每次 CI，普通边界及错误路径测试进入 Windows CI。安装器构建、便携包、CI 和发布结果在完成后补充。
+
+未覆盖：断电、硬件故障、完全写满真实磁盘、缺少 WebView2 的干净虚拟机、不同 ACL/网络文件系统、独立安全审计。磁盘满通过有状态失败写入器覆盖错误传播，不能代表所有设备行为。中断恢复为清理重试，不是断点续传。
+
+## 0.1.0 历史记录
 
 本机验证环境为 Windows x64、Rust MSVC stable、Node.js 24。以下只记录实际验证内容，不代表所有 Windows 版本或硬件均已覆盖。
 
-## 自动化检查
+### 自动化检查
 
 `cargo test -p foldsentinel --locked` 的 13 项测试全部通过，覆盖：
 
@@ -15,7 +46,7 @@
 
 `cargo clippy --workspace --all-targets --locked -- -D warnings`、Rustfmt 和 `npm run build`（TypeScript 严格检查 + Vite）通过。CI 在干净的 Windows runner 上另外执行整个工作区测试和构建。
 
-## 原生桌面操作
+### 原生桌面操作
 
 通过真实 Windows 窗口完成以下流程，未替换后端或模拟成功：
 

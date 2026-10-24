@@ -42,6 +42,10 @@ enum VaultCommand {
     Encrypt { input: PathBuf, output: PathBuf },
     /// Decrypt a FoldSentinel FSEAL file.
     Decrypt { input: PathBuf, output: PathBuf },
+    /// List inactive interrupted jobs; no password or key is stored.
+    Interrupted,
+    /// Remove only the owned staging data of an inactive interrupted job.
+    Cleanup { id: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -99,7 +103,8 @@ fn main() -> Result<()> {
         Command::Vault { command } => match command {
             VaultCommand::Encrypt { input, output } => {
                 let password = read_password(true)?;
-                let report = vault::encrypt_file(&input, &output, &password)?;
+                let control = cli_control()?;
+                let report = vault::encrypt_with_control(&input, &output, &password, &control)?;
                 println!(
                     "已加密 {} -> {}（{} 字节 -> {} 字节）",
                     input.display(),
@@ -110,7 +115,8 @@ fn main() -> Result<()> {
             }
             VaultCommand::Decrypt { input, output } => {
                 let password = read_password(false)?;
-                let report = vault::decrypt_file(&input, &output, &password)?;
+                let control = cli_control()?;
+                let report = vault::decrypt_with_control(&input, &output, &password, &control)?;
                 println!(
                     "已解密 {} -> {}（{} 字节 -> {} 字节）",
                     input.display(),
@@ -119,9 +125,59 @@ fn main() -> Result<()> {
                     report.output_bytes
                 );
             }
+            VaultCommand::Interrupted => {
+                let registry = vault::recovery::default_recovery_dir()?;
+                for job in vault::recovery::interrupted_jobs(&registry)? {
+                    println!(
+                        "{}\n  输入: {}\n  输出: {}\n  临时数据: {}",
+                        job.id,
+                        job.input.display(),
+                        job.output.display(),
+                        job.staging.display()
+                    );
+                }
+            }
+            VaultCommand::Cleanup { id } => {
+                let registry = vault::recovery::default_recovery_dir()?;
+                vault::recovery::cleanup_interrupted(&registry, &id)?;
+                println!("已清理 {id} 的临时数据；源文件及最终输出保留。可重新输入密码重试。");
+            }
         },
     }
     Ok(())
+}
+
+fn cli_control() -> Result<vault::Control> {
+    let control = vault::Control::new(|p| {
+        eprintln!(
+            "{}: {} / {} 字节 {}",
+            p.phase, p.completed, p.total, p.current
+        );
+    })?;
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{
+            CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
+        };
+        static CONTROL: std::sync::OnceLock<vault::Control> = std::sync::OnceLock::new();
+        unsafe extern "system" fn handler(event: u32) -> i32 {
+            if matches!(event, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+                if let Some(control) = CONTROL.get() {
+                    control.cancel();
+                }
+                return 1;
+            }
+            0
+        }
+        CONTROL
+            .set(control.clone())
+            .map_err(|_| anyhow::anyhow!("取消处理器已初始化"))?;
+        // 回调只访问静态原子取消标记；进程内仅运行一次 vault 命令。
+        if unsafe { SetConsoleCtrlHandler(Some(handler), 1) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(control)
 }
 
 fn read_password(confirm: bool) -> Result<Zeroizing<String>> {

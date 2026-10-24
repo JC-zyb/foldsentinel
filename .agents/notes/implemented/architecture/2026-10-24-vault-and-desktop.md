@@ -12,6 +12,8 @@ Status: implemented
 
 首版使用整包认证，限制为 64 MiB / 10,000 项。输出禁止覆盖，源数据始终保留。桌面耗时操作进入 blocking worker，前端仅暴露明确的业务命令和原生选择框，不开放 Shell 或通用文件系统 API。
 
+v0.2 的新建加密改为 [流式 v2 与可恢复任务](2026-10-24-streaming-v2.md)。本文保留 v1 格式及固定参数兼容约束；整包路径只用于旧包解码，旧编码器仅保留为测试支持。
+
 Windows 文件名不区分大小写，GUI 产物为 `FoldSentinel.exe`，CLI 必须使用独立名称 `foldsentinel-cli.exe`，避免同一 target 目录和便携包互相覆盖。
 
 历史检索：仓库此前没有 `.agents/notes/`，没有重叠笔记；README 的未来架构保留驱动方向，但首版不实现服务或驱动。
