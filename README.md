@@ -2,17 +2,22 @@
 
 FoldSentinel is an open-source Windows folder protection project built with Rust.
 
-The project is intended to provide two complementary protection modes:
+The first usable CLI provides reversible file-attribute protection:
 
-- an encrypted vault for protecting file contents at rest;
-- optional Windows file-system integration for locking, hiding, and read-only policies on existing folders.
+- `protect`: recursively apply `hidden`, `readonly`, or `hidden-readonly` to a file or directory tree;
+- `unprotect`: restore the attributes captured before protection;
+- `status`: inspect the tracked protection records;
+- `state-path`: print the state file location.
 
-The current repository is an initial Rust workspace. The security model, recovery behavior, and supported Windows versions will be documented before user data is handled by a release build.
+Protection records are stored in `%APPDATA%\\FoldSentinel\\state.json`. The state file keeps the original attributes so an unprotect operation can restore them. The current implementation is a reversible convenience layer, not a cryptographic boundary: Windows directory read-only attributes do not prevent every write path, and the project does not yet include a kernel minifilter or encrypted vault.
 
 ## Development
 
 ```powershell
-cargo run
+cargo run -- state-path
+cargo run -- protect C:\\Private\\Notes --mode hidden-readonly
+cargo run -- status C:\\Private\\Notes
+cargo run -- unprotect C:\\Private\\Notes
 cargo test
 ```
 
