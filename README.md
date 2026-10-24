@@ -2,7 +2,7 @@
 
 文件夹哨兵：使用 Rust + Tauri 2 构建的开源 Windows 文件保护工具。支持中英双语、文件 / 文件夹流式密码加密包、串行任务队列、只读验证、历史与重试，以及可恢复的隐藏、只读属性管理。
 
-## 使用 v0.4（开发中）
+## 使用 v0.4 预览版
 
 在 [Releases](https://github.com/JC-zyb/foldsentinel/releases) 下载 Windows x64 安装包或便携版。系统需要 Windows 10/11 与 Microsoft Edge WebView2 Runtime；安装器可按需获取 Runtime，便携版需提前具备 Runtime。当前版本未做代码签名。
 
@@ -58,7 +58,7 @@ CLI 通过终端无回显输入密码，不支持把密码放进命令行参数�
 
 核心在 `src/`，桌面桥接在 `src-tauri/`，TypeScript 界面在 `ui/`。格式与兼容性约定见 [格式说明](docs/FORMAT.md)。
 
-Windows CI 执行版本一致性、真实 IO、隔离小卷写满与安装升级检查，并保留报告和安装包、便携包。手动执行 `./scripts/package.ps1` 可完成构建、打包、内容检查和 SHA-256 生成，结果位于 `artifacts/<版本>/`。本分支 v0.4 尚未发布；已验证内容、重现命令及未覆盖场景见 [验证记录](docs/VALIDATION.md)。
+Windows CI 执行版本一致性、真实 IO、隔离小卷写满与安装升级检查，并保留报告和安装包、便携包。手动执行 `./scripts/package.ps1` 可完成构建、打包、内容检查和 SHA-256 生成，结果位于 `artifacts/<版本>/`。发布附件与 CI 结果以对应提交的 Release 为准；本机已验证内容、重现命令及未覆盖场景见 [验证记录](docs/VALIDATION.md)。
 
 安装、升级、便携版数据位置与校验方式见 [安装与发布](docs/INSTALL.md)。磁盘空间预检采用保守估计，不能保证其他程序随后不占用空间；运行中仍会明确报告写入失败。JavaScript 字符串无法保证原地清零；Rust 密码与明文缓冲使用 Zeroizing，前端仅保留当前队列所需的内存引用。
 

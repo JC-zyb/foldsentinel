@@ -2,7 +2,7 @@
 
 ## Windows 安装与便携版
 
-Windows 10/11 x64 需要 WebView2 Runtime。v0.4 的安装包名为 `FoldSentinel_0.4.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。v0.4 尚在开发验证，下载时以实际 Release 为准。
+Windows 10/11 x64 需要 WebView2 Runtime。v0.4 的安装包名为 `FoldSentinel_0.4.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。v0.4 为预览版本，下载时以实际 Release 为准。
 
 升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
 
