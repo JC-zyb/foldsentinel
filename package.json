@@ -1,11 +1,12 @@
 {
   "name": "foldsentinel-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-transform-types --test tests/workflows.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": { "@tauri-apps/api": "^2.0.0", "@tauri-apps/plugin-dialog": "^2.0.0" },

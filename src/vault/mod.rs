@@ -1,14 +1,18 @@
 mod control;
+mod error;
 mod legacy;
 pub mod recovery;
+mod space;
 mod stream;
+pub mod workflow;
 
 use anyhow::{Context, Result, ensure};
 pub use control::{Control, Progress};
+pub use error::{ErrorCode, error_code};
 pub(crate) use legacy::reject_link;
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +36,60 @@ pub fn encrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
 }
 pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<VaultReport> {
     decrypt_with_control(input, output, password, &Control::new(|_| {})?)
+}
+
+/// 只读验证：完整认证内容及归档结构，不创建临时明文或输出文件。
+pub fn verify_with_control(input: &Path, password: &str, control: &Control) -> Result<VaultReport> {
+    legacy::validate_password(password)?;
+    control.check()?;
+    reject_link(input)?;
+    let input = fs::canonicalize(input)?;
+    let mut source = open_stable(&input)?;
+    let wire_size = source.metadata()?.len();
+    let mut magic = [0; 8];
+    source.read_exact(&mut magic)?;
+    if &magic == b"FSEAL001" {
+        let report = legacy::decode(&input, None, password, control)?;
+        control.check()?;
+        control.begin_commit()?;
+        control.phase("completed", "");
+        return Ok(VaultReport {
+            input_bytes: report.input_bytes as u64,
+            output_bytes: report.output_bytes as u64,
+            directory: report.directory,
+        });
+    }
+    ensure!(&magic == MAGIC, ErrorCode::UnsupportedFormat);
+    let mut header = [0; HEADER_LEN];
+    header[..8].copy_from_slice(&magic);
+    source.read_exact(&mut header[8..])?;
+    let size = u64::from_le_bytes(header[34..42].try_into()?);
+    let entries = u32::from_le_bytes(header[42..46].try_into()?) as usize;
+    ensure!(
+        size <= MAX_CONTENT && entries <= MAX_ENTRIES && (header[9] != 0 || entries == 0),
+        ErrorCode::InvalidPackage
+    );
+    control.total(wire_size);
+    control.phase("deriving", "");
+    let mut stream = DecryptReader::new(source, password, header, control.clone())?;
+    control.advance(HEADER_LEN as u64);
+    control.phase("checking", "");
+    let directory = header[9] == 1;
+    if directory {
+        process_directory(&mut stream, None, Some((size, entries)), control)
+            .context(ErrorCode::InvalidPackage)?;
+    } else {
+        let copied = std::io::copy(&mut stream.by_ref().take(size + 1), &mut std::io::sink())?;
+        ensure!(copied == size, ErrorCode::InvalidPackage);
+    }
+    control.check()?;
+    control.begin_commit()?;
+    control.phase("completed", "");
+    Ok(VaultReport {
+        input_bytes: wire_size,
+        output_bytes: size,
+        directory,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -107,7 +165,7 @@ fn copy_content(
 ) -> Result<()> {
     ensure!(
         file.metadata()?.len() == expected && file.metadata()?.modified()? == modified,
-        "源文件在扫描后发生变化"
+        ErrorCode::SourceChanged
     );
     let mut buffer = zeroize::Zeroizing::new(vec![0; 128 * 1024]);
     let mut copied = 0u64;
@@ -118,13 +176,15 @@ fn copy_content(
             break;
         }
         copied += count as u64;
-        ensure!(copied <= expected, "源文件在读取时增大");
-        target.write_all(&buffer[..count])?;
+        ensure!(copied <= expected, ErrorCode::SourceChanged);
+        target
+            .write_all(&buffer[..count])
+            .context(ErrorCode::WriteFailed)?;
         control.advance(count as u64);
     }
     ensure!(
         copied == expected && file.metadata()?.modified()? == modified,
-        "源文件在读取时发生变化"
+        ErrorCode::SourceChanged
     );
     Ok(())
 }
@@ -178,6 +238,23 @@ pub fn encrypt_with_control(
         items.iter().map(|i| i.size).sum()
     };
     ensure!(total <= MAX_CONTENT, "内容超过 1 TiB 限制");
+    let archive_bound = if directory {
+        items
+            .iter()
+            .map(|i| {
+                i.size.div_ceil(512) * 512
+                    + 1024
+                    + (i.relative.as_os_str().len() as u64 * 4 + 1).div_ceil(512) * 512
+            })
+            .sum::<u64>()
+            + 1024
+    } else {
+        total
+    };
+    space::preflight(
+        &output,
+        archive_bound + (archive_bound / stream::CHUNK as u64 + 1) * 20 + HEADER_LEN as u64,
+    )?;
     control.total(total);
     let mut header = [0; HEADER_LEN];
     header[..8].copy_from_slice(MAGIC);
@@ -194,7 +271,8 @@ pub fn encrypt_with_control(
         let mut target = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(job.payload())?;
+            .open(job.payload())
+            .context(ErrorCode::WriteFailed)?;
         control.phase("deriving", "");
         let mut stream = EncryptWriter::new(&mut target, password, header, control.clone())?;
         control.phase("encrypting", "");
@@ -220,7 +298,7 @@ pub fn encrypt_with_control(
                     let metadata = file.metadata()?;
                     ensure!(
                         metadata.len() == item.size && metadata.modified()? == item.modified,
-                        "源文件在扫描后发生变化"
+                        ErrorCode::SourceChanged
                     );
                     let mut reader = TrackedReader {
                         file: &mut file,
@@ -232,14 +310,14 @@ pub fn encrypt_with_control(
                         reader.read == item.size
                             && file.metadata()?.len() == item.size
                             && file.metadata()?.modified()? == item.modified,
-                        "源文件在读取时发生变化"
+                        ErrorCode::SourceChanged
                     );
                 }
             }
             archive.finish()?;
             drop(archive);
-            control.phase("verifying", "重新核对源目录");
-            ensure!(scan(&input, control)? == items, "源目录在操作期间发生变化");
+            control.phase("verifying", "");
+            ensure!(scan(&input, control)? == items, ErrorCode::SourceChanged);
         } else {
             let metadata = file_metadata.as_ref().expect("file metadata");
             copy_content(
@@ -252,7 +330,7 @@ pub fn encrypt_with_control(
         }
         let written = stream.finish()?;
         control.phase("syncing", "");
-        target.sync_all()?;
+        target.sync_all().context(ErrorCode::WriteFailed)?;
         drop(target);
         control.begin_commit()?;
         commit(&job.payload(), &output)?;
@@ -285,8 +363,8 @@ pub fn decrypt_with_control(
     let job = recovery::Job::create(&input, &output, true, &control.recovery_dir)?;
     let result = (|| {
         if &magic == b"FSEAL001" {
-            control.phase("legacy", "正在验证 v0.1 加密包");
-            let report = legacy::decrypt_file(&input, &job.payload(), password)?;
+            control.phase("legacy", "");
+            let report = legacy::decode(&input, Some(&job.payload()), password, control)?;
             control.check()?;
             control.begin_commit()?;
             commit(&job.payload(), &output)?;
@@ -296,7 +374,7 @@ pub fn decrypt_with_control(
                 directory: report.directory,
             });
         }
-        ensure!(&magic == MAGIC, "不是支持的 FoldSentinel 加密包");
+        ensure!(&magic == MAGIC, ErrorCode::UnsupportedFormat);
         let mut header = [0; HEADER_LEN];
         header[..8].copy_from_slice(&magic);
         source.read_exact(&mut header[8..])?;
@@ -304,25 +382,33 @@ pub fn decrypt_with_control(
         let entries = u32::from_le_bytes(header[42..46].try_into()?) as usize;
         ensure!(
             size <= MAX_CONTENT && entries <= MAX_ENTRIES && (header[9] != 0 || entries == 0),
-            "加密包声明的大小或条目数超限"
+            ErrorCode::InvalidPackage
         );
         control.total(wire_size);
         control.phase("deriving", "");
         let mut stream = DecryptReader::new(source, password, header, control.clone())?;
+        space::preflight(&output, size.saturating_add(entries as u64 * 4096))?;
         control.advance(HEADER_LEN as u64);
         control.phase("decrypting", "");
         let directory = header[9] == 1;
         if directory {
-            restore_directory(&mut stream, &job.payload(), size, entries, control)?;
+            process_directory(
+                &mut stream,
+                Some(&job.payload()),
+                Some((size, entries)),
+                control,
+            )
+            .context(ErrorCode::InvalidPackage)?;
         } else {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(job.payload())?;
-            let copied = std::io::copy(&mut stream.by_ref().take(size + 1), &mut file)?;
-            ensure!(copied == size, "恢复文件大小与认证头部不符");
+                .open(job.payload())
+                .context(ErrorCode::WriteFailed)?;
+            let copied = copy_to_file(&mut stream.by_ref().take(size + 1), &mut file)?;
+            ensure!(copied == size, ErrorCode::InvalidPackage);
             control.phase("syncing", "");
-            file.sync_all()?;
+            file.sync_all().context(ErrorCode::WriteFailed)?;
         }
         control.begin_commit()?;
         commit(&job.payload(), &output)?;
@@ -337,16 +423,35 @@ pub fn decrypt_with_control(
     Ok(report)
 }
 
-fn restore_directory(
+// 分开读取与写入的错误上下文，避免磁盘写入失败被归为源读取失败。
+fn copy_to_file(source: &mut impl Read, target: &mut File) -> Result<u64> {
+    let mut buffer = zeroize::Zeroizing::new(vec![0; 128 * 1024]);
+    let mut copied = 0;
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            return Ok(copied);
+        }
+        target
+            .write_all(&buffer[..count])
+            .context(ErrorCode::WriteFailed)?;
+        copied += count as u64;
+    }
+}
+
+fn process_directory(
     source: &mut impl Read,
-    destination: &Path,
-    expected: u64,
-    entries: usize,
+    destination: Option<&Path>,
+    expected: Option<(u64, usize)>,
     control: &Control,
 ) -> Result<()> {
-    fs::create_dir(destination)?;
+    if let Some(destination) = destination {
+        fs::create_dir(destination).context(ErrorCode::WriteFailed)?;
+    }
+    let (limit, entries) = expected.unwrap_or((legacy::MAX_PLAINTEXT as u64, 10_000));
     let mut archive = tar::Archive::new(&mut *source);
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
+    let mut files = Vec::new();
     let mut total = 0u64;
     let mut count = 0;
     let mut names = 0;
@@ -383,25 +488,57 @@ fn restore_directory(
         let name = relative.to_str().context("归档包含非 Unicode 路径")?;
         names += name.len();
         ensure!(name.len() <= 4096 && names <= MAX_NAMES, "归档路径超限");
-        ensure!(seen.insert(name.to_lowercase()), "归档存在重复路径");
-        control.phase("decrypting", name);
-        let path = destination.join(&relative);
+        let key = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+            .join("/");
+        ensure!(seen.insert(key.clone()), "归档存在重复路径");
+        if kind.is_file() {
+            files.push(key);
+        }
+        control.current(name);
+        let path = destination.map(|destination| destination.join(&relative));
         if kind.is_dir() {
             ensure!(entry.size() == 0, "目录条目携带数据");
-            fs::create_dir_all(path)?;
+            if let Some(path) = path {
+                fs::create_dir_all(path).context(ErrorCode::WriteFailed)?;
+            }
         } else {
             ensure!(kind.is_file(), "归档包含链接或特殊文件");
             total = total.checked_add(entry.size()).context("归档大小溢出")?;
-            ensure!(total <= expected, "归档文件总量超出认证声明");
-            fs::create_dir_all(path.parent().context("缺少归档父目录")?)?;
-            let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-            let copied = std::io::copy(&mut entry, &mut file)?;
+            ensure!(total <= limit, "归档文件总量超出认证声明");
+            let copied = if let Some(path) = path {
+                fs::create_dir_all(path.parent().context("缺少归档父目录")?)
+                    .context(ErrorCode::WriteFailed)?;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .context(ErrorCode::WriteFailed)?;
+                let copied = copy_to_file(&mut entry, &mut file)?;
+                file.sync_all().context(ErrorCode::WriteFailed)?;
+                copied
+            } else {
+                std::io::copy(&mut entry, &mut std::io::sink())?
+            };
             ensure!(copied == entry.size(), "归档文件截断");
-            file.sync_all()?;
         }
     }
+    for file in files {
+        control.check()?;
+        let prefix = format!("{file}/");
+        ensure!(
+            !seen
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|name| name.starts_with(&prefix)),
+            "归档文件与目录冲突"
+        );
+    }
     ensure!(
-        count == entries && total == expected && long_name.is_none(),
+        expected.is_none_or(|(size, entries)| count == entries && total == size)
+            && long_name.is_none(),
         "归档条目或文件总量不符"
     );
     // tar 在零头部停止；必须继续消费并验证流的终块，不能把 tar EOF 当成认证 EOF。
@@ -432,7 +569,9 @@ fn commit(source: &Path, output: &Path) -> Result<()> {
         windows_sys::Win32::Storage::FileSystem::MoveFileExW(source.as_ptr(), output.as_ptr(), 0)
     } == 0
     {
-        return Err(std::io::Error::last_os_error()).context("提交输出失败，未覆盖已有目标");
+        return Err(std::io::Error::last_os_error())
+            .context("提交输出失败，未覆盖已有目标")
+            .context(ErrorCode::WriteFailed);
     }
     Ok(())
 }

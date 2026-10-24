@@ -6,8 +6,11 @@ use argon2::{Algorithm, Argon2, Params, Version};
 #[cfg(test)]
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
+#[cfg(test)]
 use std::collections::HashSet;
-use std::fs::{self, File, OpenOptions};
+#[cfg(test)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
@@ -18,6 +21,7 @@ const MAGIC: &[u8; 8] = b"FSEAL001";
 const HEADER_LEN: usize = 38;
 const TAG_LEN: usize = 16;
 pub const MAX_PLAINTEXT: usize = 64 * 1024 * 1024;
+#[cfg(test)]
 const MAX_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -80,16 +84,52 @@ pub fn encrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
 }
 
 /// 认证通过前不落盘明文；目录只恢复到新的位置。
+#[cfg(test)]
 pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<VaultReport> {
+    decode(input, Some(output), password, &super::Control::new(|_| {})?)
+}
+
+pub(super) fn decode(
+    input: &Path,
+    output: Option<&Path>,
+    password: &str,
+    control: &super::Control,
+) -> Result<VaultReport> {
     validate_password(password)?;
-    let output = output_path(output)?;
-    let payload = read_limited(input, MAX_PLAINTEXT + HEADER_LEN + TAG_LEN)?;
+    let output = output.map(output_path).transpose()?;
+    control.check()?;
+    let mut file = super::open_stable(input)?;
+    let length = file.metadata()?.len();
+    ensure!(
+        length <= (MAX_PLAINTEXT + HEADER_LEN + TAG_LEN) as u64,
+        super::ErrorCode::InvalidPackage
+    );
+    control.total(length);
+    control.phase("legacy", "");
+    let mut payload = Zeroizing::new(Vec::new());
+    let mut buffer = Zeroizing::new(vec![0; 128 * 1024]);
+    loop {
+        control.check()?;
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        ensure!(
+            payload.len() + count <= MAX_PLAINTEXT + HEADER_LEN + TAG_LEN,
+            super::ErrorCode::InvalidPackage
+        );
+        payload.extend_from_slice(&buffer[..count]);
+        control.advance(count as u64);
+    }
     ensure!(
         payload.len() >= HEADER_LEN + TAG_LEN && &payload[..8] == MAGIC,
-        "不是有效的 FoldSentinel 加密包"
+        super::ErrorCode::InvalidPackage
     );
-    ensure!(payload[8] == 1, "不支持的加密包版本: {}", payload[8]);
-    ensure!(payload[9] <= 1, "不支持的加密包类型");
+    ensure!(
+        payload[8] == 1 && payload[9] <= 1,
+        super::ErrorCode::UnsupportedFormat
+    );
+    control.phase("deriving", "");
     let key = derive_key(password, &payload[10..26])?;
     let cipher =
         Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| anyhow::anyhow!("初始化解密失败"))?;
@@ -102,13 +142,37 @@ pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
                     aad: &payload[..HEADER_LEN],
                 },
             )
-            .map_err(|_| anyhow::anyhow!("密码错误或加密包已损坏，未生成恢复数据"))?,
+            .map_err(|_| anyhow::anyhow!(super::ErrorCode::Authentication))?,
     );
     let directory = payload[9] == 1;
+    control.check()?;
+    control.phase(
+        if output.is_some() {
+            "decrypting"
+        } else {
+            "checking"
+        },
+        "",
+    );
+    if let Some(output) = &output {
+        super::space::preflight(output, plaintext.len() as u64 + 10_000 * 4096)?;
+    }
     if directory {
-        unpack_directory(&plaintext, &output)?;
-    } else {
-        write_new_file(&output, &plaintext)?;
+        // 验证和恢复共用有界 raw tar 解析器。
+        super::process_directory(&mut &plaintext[..], output.as_deref(), None, control)
+            .context(super::ErrorCode::InvalidPackage)?;
+    } else if let Some(output) = output {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .context(super::ErrorCode::WriteFailed)?;
+        for bytes in plaintext.chunks(128 * 1024) {
+            control.check()?;
+            file.write_all(bytes)
+                .context(super::ErrorCode::WriteFailed)?;
+        }
+        file.sync_all().context(super::ErrorCode::WriteFailed)?;
     }
     Ok(VaultReport {
         input_bytes: payload.len(),
@@ -133,6 +197,7 @@ pub(super) fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 3
     Ok(key)
 }
 
+#[cfg(test)]
 fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
     let file = File::open(path).with_context(|| format!("打开文件失败: {}", path.display()))?;
     let metadata = file.metadata()?;
@@ -147,7 +212,7 @@ fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
 pub(super) fn output_path(path: &Path) -> Result<PathBuf> {
     ensure!(path.file_name().is_some(), "请指定完整输出名称");
     match fs::symlink_metadata(path) {
-        Ok(_) => bail!("输出位置已存在，请选择新名称: {}", path.display()),
+        Ok(_) => bail!(super::ErrorCode::OutputExists),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).context("检查输出位置失败"),
     }
@@ -160,6 +225,7 @@ pub(super) fn output_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(path.file_name().context("缺少输出名称")?))
 }
 
+#[cfg(test)]
 fn write_new_file(output: &Path, bytes: &[u8]) -> Result<()> {
     let mut temporary =
         tempfile::NamedTempFile::new_in(output.parent().context("缺少输出父目录")?)?;
@@ -260,42 +326,21 @@ pub(super) fn validate_archive_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn unpack_directory(bytes: &[u8], output: &Path) -> Result<()> {
     let staging = tempfile::tempdir_in(output.parent().context("缺少输出父目录")?)?;
-    let mut archive = tar::Archive::new(bytes);
-    let mut seen = HashSet::new();
-    let mut total = 0u64;
-    for (index, entry) in archive.entries()?.enumerate() {
-        ensure!(index < MAX_ENTRIES, "归档条目超过限制");
-        let mut entry = entry.context("读取文件夹归档失败")?;
-        let path = entry.path()?.into_owned();
-        validate_archive_path(&path)?;
-        ensure!(
-            seen.insert(path.to_string_lossy().to_lowercase()),
-            "归档存在重复路径"
-        );
-        let destination = staging.path().join(&path);
-        let kind = entry.header().entry_type();
-        if kind.is_dir() {
-            fs::create_dir_all(&destination)?;
-        } else {
-            ensure!(kind.is_file(), "归档包含链接或特殊文件，已拒绝恢复");
-            total = total.checked_add(entry.size()).context("归档大小溢出")?;
-            ensure!(total <= MAX_PLAINTEXT as u64, "归档数据超过限制");
-            fs::create_dir_all(destination.parent().context("归档路径缺少父目录")?)?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&destination)?;
-            std::io::copy(&mut entry, &mut file)?;
-            file.sync_all()?;
-        }
-    }
-    move_new_directory(staging.path(), output)?;
+    let destination = staging.path().join("payload");
+    super::process_directory(
+        &mut &bytes[..],
+        Some(&destination),
+        None,
+        &super::Control::new(|_| {})?,
+    )?;
+    move_new_directory(&destination, output)?;
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn move_new_directory(source: &Path, destination: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -317,7 +362,7 @@ fn move_new_directory(source: &Path, destination: &Path) -> Result<()> {
     }
     Ok(())
 }
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn move_new_directory(_source: &Path, _destination: &Path) -> Result<()> {
     bail!("首版仅支持在 Windows 恢复文件夹")
 }

@@ -14,6 +14,8 @@ Status: implemented
 
 v0.2 的新建加密改为 [流式 v2 与可恢复任务](2026-10-24-streaming-v2.md)。本文保留 v1 格式及固定参数兼容约束；整包路径只用于旧包解码，旧编码器仅保留为测试支持。
 
+v0.3 的[双语任务与只读验证](2026-10-24-daily-workflows.md) 沿用 v1 兼容解码，验证不创建恢复输出，语言偏好和不含密码的任务描述仅保存在本机。
+
 Windows 文件名不区分大小写，GUI 产物为 `FoldSentinel.exe`，CLI 必须使用独立名称 `foldsentinel-cli.exe`，避免同一 target 目录和便携包互相覆盖。
 
 历史检索：仓库此前没有 `.agents/notes/`，没有重叠笔记；README 的未来架构保留驱动方向，但首版不实现服务或驱动。

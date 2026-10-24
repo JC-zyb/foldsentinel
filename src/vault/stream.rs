@@ -1,9 +1,10 @@
-use super::{Control, legacy};
+use super::{Control, ErrorCode, legacy};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{
     KeyInit, Payload,
     stream::{DecryptorBE32, EncryptorBE32},
 };
+use anyhow::Context;
 use anyhow::{Result, ensure};
 use std::io::{self, Read, Write};
 use zeroize::{Zeroize, Zeroizing};
@@ -36,7 +37,7 @@ impl<W: Write> EncryptWriter<W> {
     ) -> Result<Self> {
         let encryptor = EncryptorBE32::from_aead(cipher(password, &header)?, header[26..33].into());
         control.check()?;
-        target.write_all(&header)?;
+        target.write_all(&header).context(ErrorCode::WriteFailed)?;
         Ok(Self {
             target,
             encryptor: Some(encryptor),
@@ -66,8 +67,9 @@ impl<W: Write> EncryptWriter<W> {
                 aad: &self.header,
             })
             .map_err(|_| anyhow::anyhow!("加密终块失败"))?;
-        self.frame(&ciphertext, true)?;
-        self.target.flush()?;
+        self.frame(&ciphertext, true)
+            .context(ErrorCode::WriteFailed)?;
+        self.target.flush().context(ErrorCode::WriteFailed)?;
         Ok(self.written)
     }
 }
@@ -116,7 +118,7 @@ impl<R: Read> DecryptReader<R> {
     ) -> Result<Self> {
         ensure!(
             &header[..8] == MAGIC && header[8] == 2 && header[9] <= 1 && header[33] == 20,
-            "不支持或损坏的 v2 头部"
+            ErrorCode::UnsupportedFormat
         );
         let decryptor = DecryptorBE32::from_aead(cipher(password, &header)?, header[26..33].into());
         Ok(Self {
@@ -149,7 +151,7 @@ impl<R: Read> Read for DecryptReader<R> {
             let last = frame & LAST != 0;
             let length = (frame & !LAST) as usize;
             if !(16..=CHUNK + 16).contains(&length) || (!last && length != CHUNK + 16) {
-                return Err(io::Error::other("加密分块长度不合法"));
+                return Err(io::Error::other(ErrorCode::InvalidPackage));
             }
             let mut ciphertext = vec![0; length];
             self.source.read_exact(&mut ciphertext)?;
@@ -168,13 +170,13 @@ impl<R: Read> Read for DecryptReader<R> {
                     .expect("unfinished stream")
                     .decrypt_next(payload)
             }
-            .map_err(|_| io::Error::other("密码错误或加密包分块已损坏"))?;
+            .map_err(|_| io::Error::other(ErrorCode::Authentication))?;
             self.buffer = Zeroizing::new(plaintext);
             self.offset = 0;
             if last {
                 let mut extra = [0];
                 if self.source.read(&mut extra)? != 0 {
-                    return Err(io::Error::other("认证终块后存在多余数据"));
+                    return Err(io::Error::other(ErrorCode::InvalidPackage));
                 }
                 self.done = true;
             }

@@ -62,7 +62,7 @@ impl Control {
 
     pub(crate) fn check(&self) -> io::Result<()> {
         if self.inner.state.load(Ordering::SeqCst) == 1 {
-            return Err(io::Error::other("操作已取消，未提交输出"));
+            return Err(io::Error::other(super::ErrorCode::Cancelled));
         }
         Ok(())
     }
@@ -71,7 +71,7 @@ impl Control {
         self.inner
             .state
             .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| anyhow::anyhow!("操作已取消，未提交输出"))?;
+            .map_err(|_| anyhow::anyhow!(super::ErrorCode::Cancelled))?;
         self.phase("committing", "");
         Ok(())
     }

@@ -1,0 +1,78 @@
+{
+  "cases": [
+    {
+      "no_committed_output": true,
+      "operation": "encrypt",
+      "owned_cleanup": true,
+      "phase": "deriving",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "encrypt",
+      "owned_cleanup": true,
+      "phase": "encrypting",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "encrypt",
+      "owned_cleanup": true,
+      "phase": "syncing",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "encrypt",
+      "owned_cleanup": true,
+      "phase": "committing",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "decrypt",
+      "owned_cleanup": true,
+      "phase": "deriving",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "decrypt",
+      "owned_cleanup": true,
+      "phase": "decrypting",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "decrypt",
+      "owned_cleanup": true,
+      "phase": "syncing",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "no_committed_output": true,
+      "operation": "decrypt",
+      "owned_cleanup": true,
+      "phase": "committing",
+      "real_child_killed": true,
+      "retry_matches": true,
+      "source_unchanged": true
+    }
+  ],
+  "temporary_fixtures_removed": true,
+  "version": "0.3.0"
+}

@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "仅本地窗口和文件选择对话框；不提供 Shell 或通用文件系统命令。",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:default", "core:window:allow-destroy", "dialog:allow-open", "dialog:allow-save"]
 }

@@ -42,6 +42,8 @@ enum VaultCommand {
     Encrypt { input: PathBuf, output: PathBuf },
     /// Decrypt a FoldSentinel FSEAL file.
     Decrypt { input: PathBuf, output: PathBuf },
+    /// Authenticate a package and validate archive paths without restoring files.
+    Verify { input: PathBuf },
     /// List inactive interrupted jobs; no password or key is stored.
     Interrupted,
     /// Remove only the owned staging data of an inactive interrupted job.
@@ -123,6 +125,16 @@ fn main() -> Result<()> {
                     output.display(),
                     report.input_bytes,
                     report.output_bytes
+                );
+            }
+            VaultCommand::Verify { input } => {
+                let password = read_password(false)?;
+                let control = cli_control()?;
+                let report = vault::verify_with_control(&input, &password, &control)?;
+                println!(
+                    "验证通过 {}（{} 字节，无恢复文件）",
+                    input.display(),
+                    report.input_bytes
                 );
             }
             VaultCommand::Interrupted => {

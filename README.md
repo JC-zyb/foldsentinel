@@ -1,16 +1,20 @@
 # FoldSentinel
 
-文件夹哨兵：使用 Rust + Tauri 2 构建的开源 Windows 文件保护工具。支持文件 / 文件夹流式密码加密包、进度与取消、中断任务清理重试，以及可恢复的隐藏、只读属性管理。
+文件夹哨兵：使用 Rust + Tauri 2 构建的开源 Windows 文件保护工具。支持中英双语、文件 / 文件夹流式密码加密包、串行任务队列、只读验证、历史与重试，以及可恢复的隐藏、只读属性管理。
 
-## 使用 v0.2
+## 使用 v0.3
 
 在 [Releases](https://github.com/JC-zyb/foldsentinel/releases) 下载 Windows x64 安装包或便携版。系统需要 Windows 10/11 与 Microsoft Edge WebView2 Runtime；安装器可按需获取 Runtime，便携版需提前具备 Runtime。当前版本未做代码签名。
 
-1. 打开 **加密与恢复 → 创建加密包**，选择文件或文件夹，指定源文件夹之外的新 `.fse` 路径，输入并确认密码。
-2. 使用 **恢复加密包**，输入密码，指定尚不存在的新文件或新文件夹名称。程序自动识别原内容类型。
-3. **先实际恢复并核对内容**。加密后源数据仍然保留，应用不会自动删除原件。密码遗失无法恢复。
-4. 长任务显示阶段、已处理字节和当前文件，可点击 **取消操作**。提交开始后不可取消；关闭窗口会先请求取消，完成清理后可再次关闭。
-5. 异常退出后重新打开程序，在 **中断任务** 中清理该任务的临时数据并重填路径，再输入密码重试。它不支持断点续传，也不保存密码；请同时检查最终输出是否已经生成。
+1. 右上角选择 **简体中文 / English**；首次使用遵循系统首选语言，选择会在重启后保留。
+2. 在 **创建加密包 / Encrypt** 中选择多个文件、文件夹或直接拖入窗口，也可每行填写一个完整路径。可选输出目录，留空使用各源文件的父目录；加密文件夹的输出必须位于源目录之外。
+3. 输入并确认这一批任务使用的密码，点击 **加入队列 / Add to queue**，检查每项输出建议，再点击 **开始 / 继续队列 / Start / resume**。自动避开已有名称，最终仍禁止覆盖。
+4. **恢复加密包 / Restore** 与 **验证加密包 / Verify** 也支持批量加入。验证会完整认证 v1/v2 内容并检查归档结构，不创建恢复文件或临时明文；仍建议实际恢复并核对重要文件。
+5. 长任务显示阶段、字节、速度及预计剩余时间，可取消当前任务、取消等待任务，或在当前任务后暂停队列。提交开始后不可取消；关闭窗口先暂停队列并请求取消，清理后可再次关闭。
+6. 队列与历史记录保存在本机 WebView2 用户数据中，最多保留 200 项；可清空历史，不会删除源文件。密码和密钥不写入历史；等待任务只在进程内存中暂存密码，结束或取消后释放引用，退出后重试须重新输入。
+7. 异常退出后先在 **中断任务临时数据 / Interrupted task data** 清理临时数据，再从历史或清理结果重填并输入密码重试。不支持断点续传；请同时检查最终输出是否已生成。
+
+加密后源数据仍然保留，应用不会自动删除原件。密码遗失无法恢复。界面与应用生成的文件选择标题遵循语言选择，Windows 文件对话框的系统按钮和系统错误由操作系统语言决定。
 
 **隐藏与只读** 页面提供递归属性管理与原始属性恢复，适合减少误操作。属性不是密码保护，也不能阻止管理员或其他有权限的软件访问。管理记录存储于 `%APPDATA%\FoldSentinel\state.json`；需要恢复前请保留这份记录。它记录原始属性，不代表当前属性一定未被其他软件改变。
 
@@ -37,11 +41,13 @@ cargo run -- status C:\Private\Notes
 cargo run -- unprotect C:\Private\Notes
 cargo run -- vault encrypt C:\Private\Notes C:\Private\Notes.fse
 cargo run -- vault decrypt C:\Private\Notes.fse C:\Private\Notes-restored
+cargo run -- vault verify C:\Private\Notes.fse
 cargo run -- vault interrupted
 cargo run -- vault cleanup <中断任务ID>
 cargo test -p foldsentinel
 cargo clippy --workspace --all-targets -- -D warnings
 npm ci
+npm test
 npm run tauri dev
 npm run tauri build
 ```
@@ -51,6 +57,8 @@ CLI 通过终端无回显输入密码，不支持把密码放进命令行参数�
 核心在 `src/`，桌面桥接在 `src-tauri/`，TypeScript 界面在 `ui/`。格式与兼容性约定见 [格式说明](docs/FORMAT.md)。
 
 Windows CI 会保留安装包和便携包构建产物。手动执行 `./scripts/package.ps1` 可完成构建、打包和 SHA-256 生成，结果位于 `artifacts/`。已验证内容、重现大数据验证的命令及未覆盖场景见 [验证记录](docs/VALIDATION.md)。
+
+安装、升级、便携版数据位置与校验方式见 [安装与发布](docs/INSTALL.md)。磁盘空间预检采用保守估计，不能保证其他程序随后不占用空间；运行中仍会明确报告写入失败。JavaScript 字符串无法保证原地清零；Rust 密码与明文缓冲使用 Zeroizing，前端仅保留当前队列所需的内存引用。
 
 ## License
 

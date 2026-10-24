@@ -93,12 +93,12 @@ impl Job {
         match (result, self.cleanup()) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => {
-                Err(error).context("输出已提交，但残留清理失败；请在中断任务列表中清理")
-            }
-            (Err(error), Err(cleanup)) => {
-                Err(error).context(format!("清理失败，已保留中断记录: {cleanup:#}"))
-            }
+            (Ok(_), Err(error)) => Err(error)
+                .context("输出已提交，但残留清理失败；请在中断任务列表中清理")
+                .context(super::ErrorCode::Recovery),
+            (Err(error), Err(cleanup)) => Err(error)
+                .context(format!("清理失败，已保留中断记录: {cleanup:#}"))
+                .context(super::ErrorCode::Recovery),
         }
     }
 

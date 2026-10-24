@@ -12,6 +12,10 @@ fn round_trip(bytes: &[u8]) {
     fs::write(&input, bytes).unwrap();
     let encrypted = encrypt_with_control(&input, &output, "test", &control(dir.path())).unwrap();
     assert_eq!(encrypted.input_bytes, bytes.len() as u64);
+    let before = fs::read_dir(dir.path()).unwrap().count();
+    let verified = verify_with_control(&output, "test", &control(dir.path())).unwrap();
+    assert_eq!(verified.output_bytes, bytes.len() as u64);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), before);
     decrypt_with_control(&output, &restored, "test", &control(dir.path())).unwrap();
     assert_eq!(fs::read(restored).unwrap(), bytes);
     assert_eq!(fs::read(input).unwrap(), bytes);
@@ -52,6 +56,12 @@ fn actual_v01_release_fixtures_remain_readable() {
         let input = dir.path().join("v1.fse");
         let output = dir.path().join("restored");
         fs::write(&input, fixture).unwrap();
+        let verified =
+            verify_with_control(&input, "compatibility-test-only", &control(dir.path())).unwrap();
+        assert_eq!(verified.directory, folder);
+        assert!(!dir.path().join("jobs").exists());
+        let error = verify_with_control(&input, "wrong", &control(dir.path())).unwrap_err();
+        assert_eq!(error_code(&error), ErrorCode::Authentication);
         let report = decrypt_with_control(
             &input,
             &output,
@@ -88,6 +98,11 @@ fn v2_folder_round_trip_and_progress() {
     });
     let sealed = dir.path().join("sealed");
     encrypt_with_control(&source, &sealed, "test", &c).unwrap();
+    assert!(
+        verify_with_control(&sealed, "test", &control(dir.path()))
+            .unwrap()
+            .directory
+    );
     let output = dir.path().join("restored");
     decrypt_with_control(&sealed, &output, "test", &control(dir.path())).unwrap();
     assert!(output.join("空目录").is_dir());
@@ -163,6 +178,7 @@ fn tampering_reordering_truncation_and_append_never_commit() {
     changes.push(appended);
     for bytes in changes {
         fs::write(&sealed, bytes).unwrap();
+        assert!(verify_with_control(&sealed, "test", &control(dir.path())).is_err());
         assert!(decrypt_with_control(&sealed, &output, "test", &control(dir.path())).is_err());
         assert!(!output.exists());
         assert!(
@@ -178,10 +194,11 @@ fn tampering_reordering_truncation_and_append_never_commit() {
 
 #[test]
 fn cancellation_before_commit_cleans_payload_and_journal() {
-    for phase in ["encrypting", "syncing"] {
+    for phase in ["deriving", "encrypting", "verifying", "syncing"] {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input");
-        fs::write(&input, vec![7; stream::CHUNK + 1]).unwrap();
+        fs::create_dir(&input).unwrap();
+        fs::write(input.join("file"), vec![7; stream::CHUNK + 1]).unwrap();
         let output = dir.path().join("output");
         let token = Arc::new(Mutex::new(None::<Control>));
         let capture = token.clone();
@@ -202,6 +219,173 @@ fn cancellation_before_commit_cleans_payload_and_journal() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn cancellation_after_commit_gate_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source");
+    let output = dir.path().join("package");
+    fs::create_dir(&input).unwrap();
+    fs::write(input.join("file"), b"keep source").unwrap();
+    let token = Arc::new(Mutex::new(None::<Control>));
+    let captured = token.clone();
+    let c = Control::with_recovery_dir(dir.path().join("jobs"), move |p| {
+        if p.phase == "committing" {
+            assert!(!captured.lock().unwrap().as_ref().unwrap().cancel());
+        }
+    });
+    *token.lock().unwrap() = Some(c.clone());
+    encrypt_with_control(&input, &output, "test", &c).unwrap();
+    token.lock().unwrap().take();
+    verify_with_control(&output, "test", &control(dir.path())).unwrap();
+    assert_eq!(fs::read(input.join("file")).unwrap(), b"keep source");
+}
+
+#[cfg(windows)]
+#[test]
+fn extended_windows_paths_round_trip_and_readonly_output_reports_permission() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut deep = fs::canonicalize(dir.path()).unwrap();
+    for n in 0..7 {
+        deep.push(format!("segment-{n}-{}", "a".repeat(40)));
+    }
+    fs::create_dir_all(&deep).unwrap();
+    assert!(deep.as_os_str().len() > 300);
+    let input = deep.join("中文.bin");
+    let sealed = deep.join("package.fse");
+    let restored = deep.join("restored.bin");
+    fs::write(&input, b"long path").unwrap();
+    encrypt_with_control(&input, &sealed, "test", &control(dir.path())).unwrap();
+    verify_with_control(&sealed, "test", &control(dir.path())).unwrap();
+    decrypt_with_control(&sealed, &restored, "test", &control(dir.path())).unwrap();
+    assert_eq!(fs::read(restored).unwrap(), b"long path");
+    // 私有测试文件设只读，不更改用户 ACL 或系统设置。
+    let denied = deep.join("readonly-target");
+    fs::write(&denied, b"keep").unwrap();
+    let original_permissions = fs::metadata(&denied).unwrap().permissions();
+    let mut permissions = original_permissions.clone();
+    permissions.set_readonly(true);
+    fs::set_permissions(&denied, permissions).unwrap();
+    let error = OpenOptions::new().write(true).open(&denied).unwrap_err();
+    assert_eq!(error_code(&error.into()), ErrorCode::PermissionDenied);
+    let error = decrypt_with_control(&sealed, &denied, "test", &control(dir.path())).unwrap_err();
+    assert_eq!(error_code(&error), ErrorCode::OutputExists);
+    fs::set_permissions(&denied, original_permissions).unwrap();
+    // 真实独占句柄模拟源文件被其他进程占用，失败后不得创建输出。
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&input)
+        .unwrap();
+    let failed_output = deep.join("locked.fse");
+    assert!(encrypt_with_control(&input, &failed_output, "test", &control(dir.path())).is_err());
+    assert!(!failed_output.exists());
+    drop(locked);
+    assert_eq!(fs::read(denied).unwrap(), b"keep");
+}
+
+#[test]
+fn verification_cancels_without_creating_journals_or_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    for fixture in [
+        include_bytes!("../../tests/fixtures/v1-file.fse").as_slice(),
+        include_bytes!("../../tests/fixtures/v1-folder.fse").as_slice(),
+    ] {
+        let input = dir.path().join("v1.fse");
+        fs::write(&input, fixture).unwrap();
+        let token = Arc::new(Mutex::new(None::<Control>));
+        let captured = token.clone();
+        let c = Control::with_recovery_dir(dir.path().join("jobs"), move |p| {
+            if p.phase == "deriving" {
+                captured.lock().unwrap().as_ref().unwrap().cancel();
+            }
+        });
+        *token.lock().unwrap() = Some(c.clone());
+        let error = verify_with_control(&input, "compatibility-test-only", &c).unwrap_err();
+        token.lock().unwrap().take();
+        assert_eq!(error_code(&error), ErrorCode::Cancelled);
+        assert!(!dir.path().join("jobs").exists());
+    }
+    let input = dir.path().join("file");
+    let sealed = dir.path().join("v2.fse");
+    fs::write(&input, vec![13; stream::CHUNK * 2]).unwrap();
+    encrypt_with_control(&input, &sealed, "test", &control(dir.path())).unwrap();
+    let registry = dir.path().join("verify-jobs");
+    let token = Arc::new(Mutex::new(None::<Control>));
+    let captured = token.clone();
+    let c = Control::with_recovery_dir(registry.clone(), move |p| {
+        if p.phase == "checking" {
+            captured.lock().unwrap().as_ref().unwrap().cancel();
+        }
+    });
+    *token.lock().unwrap() = Some(c.clone());
+    let error = verify_with_control(&sealed, "test", &c).unwrap_err();
+    token.lock().unwrap().take();
+    assert_eq!(error_code(&error), ErrorCode::Cancelled);
+    assert!(!registry.exists());
+}
+
+#[test]
+fn verification_rejects_archive_file_parent_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    for paths in [["parent", "parent/child"], ["parent/child", "parent"]] {
+        let mut archive = tar::Builder::new(Vec::new());
+        for path in paths {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o600);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            archive.append_data(&mut header, path, &[][..]).unwrap();
+        }
+        let source = archive.into_inner().unwrap();
+        assert!(
+            process_directory(&mut &source[..], None, Some((0, 2)), &control(dir.path())).is_err()
+        );
+    }
+}
+
+#[test]
+fn preflight_and_error_categories_are_explicit() {
+    assert!(space::require_space(100, 100).is_ok());
+    let error = space::require_space(99, 100).unwrap_err();
+    assert_eq!(error_code(&error), ErrorCode::InsufficientSpace);
+    for (error, code) in [
+        (
+            std::io::Error::from_raw_os_error(112),
+            ErrorCode::InsufficientSpace,
+        ),
+        (
+            std::io::Error::from_raw_os_error(5),
+            ErrorCode::PermissionDenied,
+        ),
+        (
+            std::io::Error::from_raw_os_error(183),
+            ErrorCode::OutputExists,
+        ),
+        (
+            std::io::Error::other(ErrorCode::Authentication),
+            ErrorCode::Authentication,
+        ),
+    ] {
+        assert_eq!(error_code(&error.into()), code);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("unknown");
+    fs::write(&input, b"FSEAL999unsupported").unwrap();
+    assert_eq!(
+        error_code(&verify_with_control(&input, "test", &control(dir.path())).unwrap_err()),
+        ErrorCode::UnsupportedFormat
+    );
+    assert_eq!(
+        error_code(
+            &verify_with_control(&dir.path().join("missing"), "test", &control(dir.path()))
+                .unwrap_err()
+        ),
+        ErrorCode::ReadFailed
+    );
 }
 
 #[test]
