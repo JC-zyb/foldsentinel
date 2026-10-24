@@ -1,0 +1,57 @@
+{
+  "cases": [
+    {
+      "case": "target_write_denied",
+      "decrypt": false,
+      "passed": true
+    },
+    {
+      "case": "target_write_denied",
+      "decrypt": true,
+      "passed": true
+    },
+    {
+      "case": "source_exclusive_handle",
+      "decrypt": false,
+      "passed": true
+    },
+    {
+      "case": "source_exclusive_handle",
+      "decrypt": true,
+      "passed": true
+    },
+    {
+      "case": "target_parent_missing_after_prepare",
+      "decrypt": false,
+      "passed": true
+    },
+    {
+      "case": "target_parent_missing_after_prepare",
+      "decrypt": true,
+      "passed": true
+    },
+    {
+      "case": "commit_and_cleanup_locked_then_retry",
+      "decrypt": false,
+      "passed": true
+    },
+    {
+      "case": "commit_and_cleanup_locked_then_retry",
+      "decrypt": true,
+      "passed": true
+    },
+    {
+      "case": "real_volume_full_after_preflight",
+      "decrypt": false,
+      "passed": true
+    },
+    {
+      "case": "real_volume_full_after_preflight",
+      "decrypt": true,
+      "passed": true
+    }
+  ],
+  "platform": "windows-x64",
+  "source_preserved": true,
+  "version": "0.4.0"
+}

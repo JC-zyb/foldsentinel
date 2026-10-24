@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "0.4.0",
+  "baseline": "0.3.0",
+  "passed": true,
+  "checks": [
+    "baseline_hash",
+    "install_v04",
+    "webview_process_v04_fresh",
+    "uninstall_v04_fresh",
+    "install_v03",
+    "webview_process_v03",
+    "upgrade",
+    "webview_process_v04",
+    "user_data_sentinels_retained",
+    "uninstall",
+    "default_uninstall_retains_sentinels"
+  ],
+  "limitations": [
+    "WebView2 child-process creation is a process smoke check, not interactive UI validation.",
+    "Sentinels check directory retention, not stored preferences or history semantics.",
+    "Runner has WebView2; missing-runtime and clean Windows VM checks remain separate."
+  ]
+}

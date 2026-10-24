@@ -20,6 +20,8 @@ cargo run --release --locked --example validate_v04 -- --report .\v04-io-result.
 
 本地 v0.4 GUI、CLI、NSIS 及便携包构建通过，版本一致性、ZIP 必需内容和两个 SHA-256 检查通过；独立复制产物后改坏校验和被明确拒绝。发布门禁要求对应提交 Windows CI、安装升级及卷写满检查全部成功，不以其他提交替代。仍待人工验证：缺少 WebView2 的干净 Windows 虚拟机安装及完全干净系统验收。没有断电、物理设备故障、网络盘断连或独立安全审计结论。
 
+首次完整远程证据：源代码提交 `e5a80c33c0ef3e32c927a465d65ab9b77eee535e` 的 [Windows CI 40085540413](https://github.com/JC-zyb/foldsentinel/actions/runs/40085540413) 全部通过。下载并核对了 [10 项真实 IO 报告](validation/v04-ci-io-windows-x64.json) 和 [11 项安装升级检查报告](validation/v04-ci-install-windows-x64.json)：包括 128 MiB NTFS VHD 在空间预检后真实写满、加密/恢复显式失败与释放空间后内容一致，以及 v0.4 新装/启动/卸载、v0.3 升级、默认卸载保留用户目录哨兵。脚本结束前确认 VHD 已卸载。这两份文件记录该次运行；最终发布提交与产物以 Release 链接的 CI 为准，文档归档提交也须通过相同门禁。
+
 ## 0.3.0 — 2026-10-24（本机验证）
 
 Windows x64 本机 30 项 Rust 工作区测试、5 项前端工作流测试、Rustfmt、Clippy `-D warnings` 与 TypeScript/Vite 构建通过。新增验证覆盖只读 v1/v2 文件及目录包、无输出与无验证任务登记、错误密码、各类篡改、缺失终块、归档文件/父路径冲突、验证取消、空间预检边界与错误分类。扩展路径测试在超过 300 字符的 Windows 路径下完成加密、只读验证、恢复；真实只读文件返回访问权限错误，已有目标保留，源文件独占句柄占用导致失败且无输出。取消检查覆盖派生、加密、目录复核与同步阶段，提交门后拒绝取消。
