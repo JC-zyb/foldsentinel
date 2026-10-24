@@ -125,14 +125,13 @@ impl StateStore {
     }
 
     pub fn unprotect(&mut self, input: &Path) -> Result<OperationReport> {
-        let root = canonical_root(input)?;
+        let root = lookup_root(input)?;
         let root_key = path_key(&root);
-        let separator = format!("{}\\", root_key.trim_end_matches('\\'));
         let matching: Vec<String> = self
             .data
             .entries
             .keys()
-            .filter(|key| *key == &root_key || key.starts_with(&separator))
+            .filter(|key| is_same_or_child(key, &root_key))
             .cloned()
             .collect();
 
@@ -174,12 +173,11 @@ impl StateStore {
         let Some(input) = input else {
             return Ok(self.entries().collect());
         };
-        let root = canonical_root(input)?;
+        let root = lookup_root(input)?;
         let root_key = path_key(&root);
-        let separator = format!("{}\\", root_key.trim_end_matches('\\'));
         Ok(self
             .entries()
-            .filter(|entry| entry.path == root_key || entry.path.starts_with(&separator))
+            .filter(|entry| is_same_or_child(&entry.path, &root_key))
             .collect())
     }
 
@@ -217,6 +215,16 @@ fn canonical_root(path: &Path) -> Result<PathBuf> {
     fs::canonicalize(path).with_context(|| format!("解析路径失败: {}", path.display()))
 }
 
+fn lookup_root(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return canonical_root(path);
+    }
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(env::current_dir()?.join(path))
+}
+
 fn targets(root: &Path) -> Vec<PathBuf> {
     if root.is_dir() {
         WalkDir::new(root)
@@ -232,6 +240,17 @@ fn targets(root: &Path) -> Vec<PathBuf> {
 
 fn path_key(path: &Path) -> String {
     path.to_string_lossy().replace('/', "\\")
+}
+
+fn is_same_or_child(candidate: &str, root: &str) -> bool {
+    let candidate = comparable_path(candidate);
+    let root = comparable_path(root);
+    candidate == root || candidate.starts_with(&format!("{}\\", root.trim_end_matches('\\')))
+}
+
+fn comparable_path(path: &str) -> String {
+    let without_prefix = path.strip_prefix(r"\\?\").unwrap_or(path);
+    without_prefix.to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -264,5 +283,11 @@ mod tests {
         let entries: Vec<_> = loaded.entries().collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].mode, ProtectionMode::Hidden);
+    }
+
+    #[test]
+    fn path_matching_handles_windows_prefix_and_case() {
+        assert!(is_same_or_child(r"\\?\C:\Data\Nested\file.txt", r"c:\data"));
+        assert!(!is_same_or_child(r"C:\Database", r"C:\Data"));
     }
 }
