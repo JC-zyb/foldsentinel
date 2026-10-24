@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use foldsentinel::{ProtectionMode, StateStore, default_state_path};
+use foldsentinel::{ProtectionMode, StateStore, default_state_path, vault};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -28,6 +29,19 @@ enum Command {
     Status { path: Option<PathBuf> },
     /// Print the state file location.
     StatePath,
+    /// Encrypt a file/folder or restore an authenticated FSEAL package.
+    Vault {
+        #[command(subcommand)]
+        command: VaultCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum VaultCommand {
+    /// Encrypt a file or folder into the FoldSentinel FSEAL format.
+    Encrypt { input: PathBuf, output: PathBuf },
+    /// Decrypt a FoldSentinel FSEAL file.
+    Decrypt { input: PathBuf, output: PathBuf },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -82,6 +96,44 @@ fn main() -> Result<()> {
             }
         }
         Command::StatePath => println!("{}", default_state_path()?.display()),
+        Command::Vault { command } => match command {
+            VaultCommand::Encrypt { input, output } => {
+                let password = read_password(true)?;
+                let report = vault::encrypt_file(&input, &output, &password)?;
+                println!(
+                    "已加密 {} -> {}（{} 字节 -> {} 字节）",
+                    input.display(),
+                    output.display(),
+                    report.input_bytes,
+                    report.output_bytes
+                );
+            }
+            VaultCommand::Decrypt { input, output } => {
+                let password = read_password(false)?;
+                let report = vault::decrypt_file(&input, &output, &password)?;
+                println!(
+                    "已解密 {} -> {}（{} 字节 -> {} 字节）",
+                    input.display(),
+                    output.display(),
+                    report.input_bytes,
+                    report.output_bytes
+                );
+            }
+        },
     }
     Ok(())
+}
+
+fn read_password(confirm: bool) -> Result<Zeroizing<String>> {
+    let password = Zeroizing::new(rpassword::prompt_password("密码: ")?);
+    if password.is_empty() {
+        bail!("密码不能为空");
+    }
+    if confirm {
+        let repeated = Zeroizing::new(rpassword::prompt_password("确认密码: ")?);
+        if password != repeated {
+            bail!("两次输入的密码不一致");
+        }
+    }
+    Ok(password)
 }

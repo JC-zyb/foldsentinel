@@ -1,14 +1,17 @@
 mod attributes;
+pub mod vault;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const STATE_VERSION: u32 = 1;
+const MANAGED_ATTRIBUTES: u32 = attributes::HIDDEN | attributes::READONLY;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -50,7 +53,7 @@ impl Default for StateFile {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct OperationReport {
     pub changed: usize,
     pub missing: usize,
@@ -59,6 +62,7 @@ pub struct OperationReport {
 pub struct StateStore {
     path: PathBuf,
     data: StateFile,
+    _lock: File,
 }
 
 impl StateStore {
@@ -67,24 +71,47 @@ impl StateStore {
     }
 
     pub fn load_from(path: PathBuf) -> Result<Self> {
-        let data = if path.exists() {
-            let bytes =
-                fs::read(&path).with_context(|| format!("读取状态文件失败: {}", path.display()))?;
-            let data: StateFile = serde_json::from_slice(&bytes)
-                .with_context(|| format!("状态文件格式无效: {}", path.display()))?;
-            if data.version != STATE_VERSION {
-                bail!(
-                    "不支持的状态文件版本 {}，当前版本为 {}",
-                    data.version,
-                    STATE_VERSION
-                );
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(parent).context("创建恢复记录目录失败")?;
+        let path = fs::canonicalize(parent)?.join(path.file_name().context("状态文件缺少名称")?);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.with_extension("lock"))?;
+        lock.try_lock()
+            .map_err(|e| anyhow::anyhow!("恢复记录正在使用或无法锁定，请稍后重试: {e}"))?;
+        let data = match fs::read(&path) {
+            Ok(bytes) => {
+                let data: StateFile = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("状态文件格式无效: {}", path.display()))?;
+                if data.version != STATE_VERSION {
+                    bail!(
+                        "不支持的状态文件版本 {}，当前版本为 {}",
+                        data.version,
+                        STATE_VERSION
+                    );
+                }
+                for (key, entry) in &data.entries {
+                    if key != &entry.path || !Path::new(&entry.path).is_absolute() {
+                        bail!("状态文件包含无效路径记录");
+                    }
+                }
+                data
             }
-            data
-        } else {
-            StateFile::default()
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StateFile::default(),
+            Err(e) => return Err(e).context("读取状态文件失败"),
         };
 
-        Ok(Self { path, data })
+        Ok(Self {
+            path,
+            data,
+            _lock: lock,
+        })
     }
 
     pub fn state_path(&self) -> &Path {
@@ -97,20 +124,32 @@ impl StateStore {
 
     pub fn protect(&mut self, input: &Path, mode: ProtectionMode) -> Result<OperationReport> {
         let root = canonical_root(input)?;
+        if is_same_or_child(&path_key(&self.path), &path_key(&root)) {
+            bail!("不能保护包含 FoldSentinel 恢复记录的目录");
+        }
         let mut report = OperationReport::default();
-
-        for target in targets(&root) {
-            let key = path_key(&target);
+        let mut planned = Vec::new();
+        let existing: BTreeMap<_, _> = self
+            .data
+            .entries
+            .keys()
+            .map(|key| (comparable_path(key), key.clone()))
+            .collect();
+        let mut next = self.data.clone();
+        for target in targets(&root)? {
+            let new_key = path_key(&target);
+            let key = existing
+                .get(&comparable_path(&new_key))
+                .cloned()
+                .unwrap_or(new_key);
             let original = match self.data.entries.get(&key) {
                 Some(entry) => entry.original_attributes,
                 None => attributes::read(&target)?,
             };
-            let desired = mode.apply(original);
-            if attributes::read(&target)? != desired {
-                attributes::write(&target, desired)?;
-                report.changed += 1;
-            }
-            self.data.entries.insert(
+            let current = attributes::read(&target)?;
+            let desired =
+                (current & !MANAGED_ATTRIBUTES) | (mode.apply(original) & MANAGED_ATTRIBUTES);
+            next.entries.insert(
                 key.clone(),
                 ManagedEntry {
                     path: key,
@@ -118,9 +157,22 @@ impl StateStore {
                     original_attributes: original,
                 },
             );
+            planned.push((target, current, desired));
         }
-
-        self.save()?;
+        // 先持久化所有原始属性；中途失败或进程中断后仍可以 unprotect。
+        let previous = std::mem::replace(&mut self.data, next);
+        if let Err(error) = self.save() {
+            self.data = previous;
+            return Err(error);
+        }
+        for (target, current, desired) in planned {
+            vault::reject_link(&target)?;
+            if current != desired {
+                attributes::write(&target, desired)
+                    .context("应用中途停止；恢复记录已保存，请使用恢复原始属性")?;
+                report.changed += 1;
+            }
+        }
         Ok(report)
     }
 
@@ -149,14 +201,21 @@ impl StateStore {
                 .cloned()
                 .expect("matching key must exist");
             let path = PathBuf::from(&entry.path);
-            if !path.exists() {
-                report.missing += 1;
-                completed.push(key);
-                continue;
+            match fs::symlink_metadata(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    report.missing += 1;
+                    completed.push(key);
+                    continue;
+                }
+                Err(e) => return Err(e).context("检查待恢复路径失败，恢复记录已保留"),
+                Ok(_) => {}
             }
+            vault::reject_link(&path)?;
             let current = attributes::read(&path)?;
-            if current != entry.original_attributes {
-                attributes::write(&path, entry.original_attributes)?;
+            let restored =
+                (current & !MANAGED_ATTRIBUTES) | (entry.original_attributes & MANAGED_ATTRIBUTES);
+            if current != restored {
+                attributes::write(&path, restored)?;
                 report.changed += 1;
             }
             completed.push(key);
@@ -187,11 +246,13 @@ impl StateStore {
                 .with_context(|| format!("创建状态目录失败: {}", parent.display()))?;
         }
         let payload = serde_json::to_vec_pretty(&self.data).context("序列化状态失败")?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, payload)
-            .with_context(|| format!("写入临时状态文件失败: {}", temporary.display()))?;
-        fs::rename(&temporary, &self.path)
-            .with_context(|| format!("替换状态文件失败: {}", self.path.display()))?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(self.path.parent().context("状态文件无父目录")?)?;
+        temporary.write_all(&payload)?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&self.path)
+            .map_err(|e| anyhow::anyhow!("替换恢复记录失败: {}", e.error))?;
         Ok(())
     }
 }
@@ -209,6 +270,7 @@ pub fn default_state_path() -> Result<PathBuf> {
 }
 
 fn canonical_root(path: &Path) -> Result<PathBuf> {
+    vault::reject_link(path)?;
     if !path.exists() {
         bail!("路径不存在: {}", path.display());
     }
@@ -225,16 +287,19 @@ fn lookup_root(path: &Path) -> Result<PathBuf> {
     Ok(env::current_dir()?.join(path))
 }
 
-fn targets(root: &Path) -> Vec<PathBuf> {
+fn targets(root: &Path) -> Result<Vec<PathBuf>> {
     if root.is_dir() {
         WalkDir::new(root)
             .follow_links(false)
             .into_iter()
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path().to_path_buf())
+            .map(|entry| {
+                let entry = entry.context("遍历路径失败，未修改文件属性")?;
+                vault::reject_link(entry.path())?;
+                Ok(entry.path().to_path_buf())
+            })
             .collect()
     } else {
-        vec![root.to_path_buf()]
+        Ok(vec![root.to_path_buf()])
     }
 }
 
@@ -249,8 +314,11 @@ fn is_same_or_child(candidate: &str, root: &str) -> bool {
 }
 
 fn comparable_path(path: &str) -> String {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}").to_lowercase();
+    }
     let without_prefix = path.strip_prefix(r"\\?\").unwrap_or(path);
-    without_prefix.to_ascii_lowercase()
+    without_prefix.to_lowercase()
 }
 
 #[cfg(test)]
@@ -279,6 +347,7 @@ mod tests {
             },
         );
         store.save().expect("save state");
+        drop(store);
         let loaded = StateStore::load_from(path).expect("reload state");
         let entries: Vec<_> = loaded.entries().collect();
         assert_eq!(entries.len(), 1);
@@ -289,5 +358,47 @@ mod tests {
     fn path_matching_handles_windows_prefix_and_case() {
         assert!(is_same_or_child(r"\\?\C:\Data\Nested\file.txt", r"c:\data"));
         assert!(!is_same_or_child(r"C:\Database", r"C:\Data"));
+        assert!(is_same_or_child(
+            r"\\?\UNC\server\share\nested",
+            r"\\server\share"
+        ));
+    }
+
+    #[test]
+    fn state_lock_and_corrupt_state_are_not_silently_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let store = StateStore::load_from(path.clone()).unwrap();
+        assert!(StateStore::load_from(path.clone()).is_err());
+        drop(store);
+        fs::write(&path, b"not json").unwrap();
+        assert!(StateStore::load_from(path).is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn attributes_restore_original_bits_after_repeated_protection() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        let file = source.join("nested/file.txt");
+        fs::write(&file, b"test").unwrap();
+        let original = attributes::read(&file).unwrap();
+        let mut store = StateStore::load_from(dir.path().join("state.json")).unwrap();
+        store
+            .protect(&source, ProtectionMode::HiddenReadonly)
+            .unwrap();
+        assert_eq!(
+            attributes::read(&file).unwrap() & MANAGED_ATTRIBUTES,
+            MANAGED_ATTRIBUTES
+        );
+        store.protect(&source, ProtectionMode::Hidden).unwrap();
+        assert_eq!(
+            attributes::read(&file).unwrap() & MANAGED_ATTRIBUTES,
+            attributes::HIDDEN
+        );
+        store.unprotect(&source).unwrap();
+        assert_eq!(attributes::read(&file).unwrap(), original);
+        assert_eq!(store.entries().count(), 0);
     }
 }
