@@ -1,0 +1,74 @@
+{
+  "fixtures": "Actual bytes written; random 1 MiB block repeated per file; no compression",
+  "measurement": "Windows GetProcessMemoryInfo PeakWorkingSetSize; core validation process, excludes WebView2",
+  "mode": "release",
+  "results": [
+    {
+      "case": "file-4GiB",
+      "content_bytes": 4294967296,
+      "decrypt_seconds": 13.9864067,
+      "encrypt_seconds": 9.4895834,
+      "encrypted_bytes": 4295049282,
+      "hashes": [
+        [
+          "",
+          "452aab8f7feaf56d7e3c4cc6bb0fc9c4f3b3a432a5e24dedf9f9564246c2525e"
+        ]
+      ],
+      "peak_working_set_bytes": 25788416,
+      "sha256_verified": true
+    },
+    {
+      "case": "folder-10GiB",
+      "content_bytes": 10737418240,
+      "decrypt_seconds": 38.1005388,
+      "encrypt_seconds": 34.9211505,
+      "encrypted_bytes": 10737629762,
+      "hashes": [
+        [
+          "文件-00.bin",
+          "54062138d75c8709659b156241299d6d2e2c06b615052d14fb25f7986c7fc364"
+        ],
+        [
+          "文件-01.bin",
+          "aa76d6ae4628354a86c586886c29963f60886ef1c57684b513ee175e803cf7cf"
+        ],
+        [
+          "文件-02.bin",
+          "7eeed29aec3a8419d23bb9d85ea694f1f2315b35fb6bf99c169a98b09a47ccc1"
+        ],
+        [
+          "文件-03.bin",
+          "d423ecd7a93b52932735920777cbfa57edabfb21f1aa6633c2536f6ec89759b5"
+        ],
+        [
+          "文件-04.bin",
+          "57c9f6a48e2403155f216b0eb62ddc7b12b771f68dba305877110daff6b303af"
+        ],
+        [
+          "文件-05.bin",
+          "a4e5439a33f7b08e20ebb24e3d01f19a03c83e3a896a279a404853ffcd0c42e9"
+        ],
+        [
+          "文件-06.bin",
+          "6854a6e378d388405f57784ee632c03a3def7c886d1170a6d60fb3edc2606966"
+        ],
+        [
+          "文件-07.bin",
+          "cfc3b02db9673315fe49381895cd9f4baf0842280e21ba9577c023dc82188fd9"
+        ],
+        [
+          "文件-08.bin",
+          "14a25d4f3ec34d168906bd225ae73bffce5e59bbd8efdc7da6cdbc5c5a4c4e91"
+        ],
+        [
+          "文件-09.bin",
+          "62d25d575a5cebf5b36ec2c6bc8633f45bb1c87f881107a8a559034a77eed102"
+        ]
+      ],
+      "peak_working_set_bytes": 25849856,
+      "sha256_verified": true
+    }
+  ],
+  "version": "0.2.0"
+}

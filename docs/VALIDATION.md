@@ -8,10 +8,12 @@
 
 | 内容 | 加密 | 恢复 | 核心进程累计峰值工作集 | 结果 |
 |---|---:|---:|---:|---|
-| 4 GiB 文件 | 20.69 s | 33.28 s | 25.92 MiB | SHA-256 一致，源文件保留 |
-| 10 GiB 文件夹 | 65.14 s | 43.83 s | 25.92 MiB | 10 项 SHA-256 一致，中文空目录保留 |
+| 4 GiB 文件 | 9.49 s | 13.99 s | 24.59 MiB | SHA-256 一致，源文件保留 |
+| 10 GiB 文件夹 | 34.92 s | 38.10 s | 24.65 MiB | 10 项 SHA-256 一致，中文空目录保留 |
 
 内存使用 Windows `GetProcessMemoryInfo / PeakWorkingSetSize`，阈值为 256 MiB；该数字属于核心验证进程，不包含 WebView2。桌面长任务实测 FoldSentinel 主进程峰值约 52.9 MiB，也不含独立 WebView2 子进程。时间受磁盘、系统缓存及并发负载影响，仅代表本机结果，不是性能保证；1 TiB 是实现限制，未做 1 TiB 实测。
+
+表格记录在收紧 tar 元数据解析后重新执行的结果；此前同规模验证也通过，峰值 25.92 MiB。完整哈希和测量值见 [大数据报告](validation/v02-large-windows-x64.json)，真实终止结果见 [中断报告](validation/v02-crash-windows-x64.json)。
 
 真实强制终止验证：子进程处理 32 MiB 隔离文件，在 payload 写入完成、提交前被父进程终止；最终输出不存在，重新启动后识别中断记录、清理专属 staging、核对源文件，再次加密恢复的 SHA-256 通过。不是用错误返回或 Mock 替代进程终止。
 
@@ -25,7 +27,7 @@ cargo build --release --example validate_v02 --locked
 .\target\release\examples\validate_v02.exe crash E:\ .\crash-result.json
 ```
 
-程序仅清理自己创建的随机临时目录，报告保留哈希和测量值。大数据验证不进入每次 CI，普通边界及错误路径测试进入 Windows CI。安装器构建、便携包、CI 和发布结果在完成后补充。
+程序仅清理自己创建的随机临时目录，报告保留哈希和测量值。大数据验证不进入每次 CI，普通边界及错误路径测试进入 Windows CI。本地 NSIS 安装器与便携包构建通过；发布附件及校验和见 [Releases](https://github.com/JC-zyb/foldsentinel/releases)，干净 Windows runner 的构建状态见 [Windows build](https://github.com/JC-zyb/foldsentinel/actions/workflows/windows.yml)。
 
 未覆盖：断电、硬件故障、完全写满真实磁盘、缺少 WebView2 的干净虚拟机、不同 ACL/网络文件系统、独立安全审计。磁盘满通过有状态失败写入器覆盖错误传播，不能代表所有设备行为。中断恢复为清理重试，不是断点续传。
 

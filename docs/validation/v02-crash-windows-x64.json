@@ -1,0 +1,10 @@
+{
+  "interrupted_job_detected": true,
+  "output_not_committed": true,
+  "owned_staging_cleaned": true,
+  "payload_bytes": 33554432,
+  "real_process_termination": true,
+  "retry_round_trip_sha256": "e8d044a1a95a19119dc9de83ae0c0a4353a5906a8bcad216408ecb84136ba497",
+  "source_unchanged": true,
+  "version": "0.2.0"
+}

@@ -68,8 +68,10 @@ impl Job {
             version: 1,
         };
         let registry = registry_dir.join(format!("{id}.json"));
+        let data = serde_json::to_vec(&record)?;
+        ensure!(data.len() <= 16 * 1024, "路径过长，恢复记录超过 16 KiB");
         let mut file = tempfile::NamedTempFile::new_in(registry_dir)?;
-        file.write_all(&serde_json::to_vec(&record)?)?;
+        file.write_all(&data)?;
         file.as_file().sync_all()?;
         file.persist_noclobber(&registry)
             .map_err(|e| anyhow::anyhow!("登记任务失败: {}", e.error))?;
@@ -147,6 +149,14 @@ fn load_record(registry: &Path, id: &str) -> Result<InterruptedJob> {
     ensure!(
         output_parent == staging_parent,
         "临时目录不属于输出父目录，拒绝清理"
+    );
+    ensure!(
+        !record
+            .output
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case(id)),
+        "输出与临时目录重叠，拒绝清理"
     );
     Ok(record)
 }

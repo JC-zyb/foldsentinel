@@ -225,6 +225,14 @@ fn interrupted_job_cleanup_cannot_remove_final_output_or_active_job() {
     assert!(recovery::interrupted_jobs(&registry).unwrap().is_empty());
     assert!(recovery::cleanup_interrupted(&registry, &id).is_err());
     drop(job);
+    let journal = registry.join(format!("{id}.json"));
+    let original_record = fs::read(&journal).unwrap();
+    let mut altered: serde_json::Value = serde_json::from_slice(&original_record).unwrap();
+    altered["output"] = serde_json::json!(dir.path().join(id.to_ascii_uppercase()));
+    fs::write(&journal, serde_json::to_vec(&altered).unwrap()).unwrap();
+    assert!(recovery::cleanup_interrupted(&registry, &id).is_err());
+    assert!(dir.path().join(&id).exists());
+    fs::write(&journal, original_record).unwrap();
     fs::write(&output, b"keep final").unwrap();
     assert_eq!(recovery::interrupted_jobs(&registry).unwrap().len(), 1);
     recovery::cleanup_interrupted(&registry, &id).unwrap();
