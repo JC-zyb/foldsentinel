@@ -150,6 +150,60 @@ fn oversized_tar_extension_rejected_before_body_read() {
 }
 
 #[test]
+fn malformed_archive_metadata_is_rejected_without_reading_attacker_sized_bodies() {
+    struct HeaderOnly(std::io::Cursor<Vec<u8>>);
+    impl Read for HeaderOnly {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            assert!(self.0.position() < 512, "解析器不得读取被拒绝条目的正文");
+            self.0.read(buf)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for kind in [
+        tar::EntryType::GNULongName,
+        tar::EntryType::GNULongLink,
+        tar::EntryType::XHeader,
+        tar::EntryType::XGlobalHeader,
+        tar::EntryType::GNUSparse,
+        tar::EntryType::Regular,
+    ] {
+        for size in [4098, u32::MAX as u64, u64::MAX] {
+            let mut header = tar::Header::new_gnu();
+            header.set_path("entry").unwrap();
+            header.set_size(size);
+            header.set_entry_type(kind);
+            header.set_cksum();
+            let mut reader = HeaderOnly(std::io::Cursor::new(header.as_bytes().to_vec()));
+            assert!(
+                process_directory(&mut reader, None, Some((0, 1)), &control(dir.path())).is_err()
+            );
+        }
+    }
+    // GNU 名称即使长度在界限内，也必须包含结尾 NUL，且不能指向上级路径。
+    for name in [b"no-final-nul".as_slice(), b"../escape\0".as_slice()] {
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(name.len() as u64);
+        header.set_entry_type(tar::EntryType::GNULongName);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "././@LongLink", name)
+            .unwrap();
+        let mut file = tar::Header::new_gnu();
+        file.set_size(0);
+        file.set_mode(0o600);
+        file.set_cksum();
+        archive
+            .append_data(&mut file, "placeholder", &[][..])
+            .unwrap();
+        let bytes = archive.into_inner().unwrap();
+        assert!(
+            process_directory(&mut &bytes[..], None, Some((0, 1)), &control(dir.path())).is_err()
+        );
+    }
+}
+
+#[test]
 fn tampering_reordering_truncation_and_append_never_commit() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
@@ -349,6 +403,13 @@ fn verification_rejects_archive_file_parent_conflicts() {
 
 #[test]
 fn preflight_and_error_categories_are_explicit() {
+    let locked =
+        anyhow::Error::from(std::io::Error::from_raw_os_error(32)).context(ErrorCode::WriteFailed);
+    assert_eq!(error_code(&locked), ErrorCode::WriteFailed);
+    assert_eq!(
+        error_code(&locked.context(ErrorCode::Recovery)),
+        ErrorCode::Recovery
+    );
     assert!(space::require_space(100, 100).is_ok());
     let error = space::require_space(99, 100).unwrap_err();
     assert_eq!(error_code(&error), ErrorCode::InsufficientSpace);

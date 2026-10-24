@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskQueue, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
+import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
 
 test('separate selections accumulate files and folders without duplicate Windows paths', () => {
@@ -40,6 +40,38 @@ test('queue is serial, continues after failures, forgets passwords and reloads i
   await restored.start(async () => { ran = true; }, () => 'internal');
   assert.equal(ran, false);
   assert.equal(saved.includes('password'), false);
+});
+
+test('draft identifies duplicates and directory boundaries without changing input order', () => {
+  const draft = inspectSources('D:\\Work\\资料\nD:/WORK/资料/a.txt\nD:\\Work\\资料2\n d:/work/资料/ \n');
+  assert.deepEqual(draft.paths, [String.raw`D:\Work\资料`, 'D:/WORK/资料/a.txt', String.raw`D:\Work\资料2`]);
+  assert.equal(draft.duplicates, 1);
+  assert.deepEqual(draft.overlaps, [[String.raw`D:\Work\资料`, 'D:/WORK/资料/a.txt']]);
+  assert.equal(inspectSources('D:\\\nD:\\a').overlaps.length, 1);
+  assert.equal(inspectSources(String.raw`\\server\share` + '\n' + String.raw`\\?\UNC\server\share\child`).overlaps.length, 1);
+  const many = Array.from({ length: MAX_SOURCES + 1 }, (_, i) => `D:/dir/${i}`);
+  assert.deepEqual(inspectSources(many.join('\n')).paths, many);
+  assert.deepEqual(inspectSources(many.join('\n')).overlaps, []);
+});
+
+test('batches summarize outcomes and old v0.3 history remains readable', async () => {
+  let saved = '';
+  const queue = new TaskQueue([], tasks => { saved = serializeHistory(tasks); }, () => {});
+  queue.add(['ok', 'bad', 'cancel'].map(input => ({ input, output: null, operation: 'verify' })), 'secret');
+  const firstBatch = queue.tasks[0].batchId;
+  assert.ok(firstBatch);
+  assert.equal(queue.tasks.every(task => task.batchId === firstBatch), true);
+  queue.cancelWaiting(queue.tasks[2].id);
+  await queue.start(async task => { if (task.input === 'bad') throw { code: 'authentication' }; }, error => error.code);
+  assert.deepEqual(batchSummary(queue.tasks), { waiting: 0, running: 0, succeeded: 1, failed: 1, cancelled: 1, interrupted: 0 });
+  queue.add([{ input: 'later', output: null, operation: 'verify' }], 'different-secret');
+  assert.notEqual(queue.tasks[3].batchId, firstBatch);
+  assert.equal(loadHistory(saved)[0].batchId, firstBatch);
+  const legacy = queue.tasks.map(({ batchId, ...task }) => task);
+  assert.equal(loadHistory(JSON.stringify(legacy)).length, 4);
+  assert.equal(loadHistory(JSON.stringify(legacy))[3].status, 'interrupted');
+  assert.equal(serializeHistory(loadHistory(saved)).includes('secret'), false);
+  assert.throws(() => loadHistory(JSON.stringify([{ ...legacy[0], batchId: {} }])), /history_invalid/);
 });
 
 test('waiting cancellation and pause do not run further tasks', async () => {

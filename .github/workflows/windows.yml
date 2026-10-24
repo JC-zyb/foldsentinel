@@ -23,12 +23,26 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run check:versions
       - run: npm test
       - run: npm run build
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo build --release --locked --example validate_v04
+      - name: Real IO and isolated volume full
+        run: ./scripts/validate-volume.ps1 -Report ./v04-io-windows-x64.json
       - run: ./scripts/package.ps1
+      - name: Installer upgrade and uninstall smoke
+        run: ./scripts/validate-install.ps1 -Report ./v04-install-windows-x64.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FoldSentinel-validation
+          path: |
+            v04-io-windows-x64.json
+            v04-install-windows-x64.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: FoldSentinel-windows-x64

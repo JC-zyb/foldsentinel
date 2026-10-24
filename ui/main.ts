@@ -1,9 +1,9 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { detectLanguage, errorText, failureCode, language, setLanguage, t, type Language, type MessageKey } from './i18n';
-import { HISTORY_KEY, loadHistory, mergeSourcePaths, serializeHistory, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
+import { batchSummary, HISTORY_KEY, MAX_SOURCES, inspectSources, loadHistory, mergeSourcePaths, serializeHistory, sourceKey, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
 import './style.css';
 
 const LANGUAGE_KEY = 'foldsentinel.language';
@@ -22,19 +22,21 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <main>
     <header><div><p class="eyebrow" ${text('eyebrow')}></p><h1 id="page-title"></h1><p id="page-description"></p></div><div class="language-control"><label for="language" ${text('language')}></label><select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div></header>
     <section id="vault-panel">
+      <div id="recovery-alert" class="notice recovery-alert" role="status" hidden><p id="recovery-alert-text"></p><button id="review-recovery" type="button" class="secondary" ${text('reviewRecovery')}></button></div>
       <div class="segmented" role="group"><button id="encrypt-tab" aria-pressed="true" ${text('encrypt')}></button><button id="decrypt-tab" aria-pressed="false" ${text('decrypt')}></button><button id="verify-tab" aria-pressed="false" ${text('verify')}></button></div>
       <div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div>
       <form id="vault-form" class="panel"><fieldset id="vault-fields"><legend class="sr-only" ${text('vault')}></legend>
         <div class="section-heading"><span class="step">1</span><div><h2 ${text('selection')}></h2><p id="source-help"></p></div></div>
         <label for="input-path" ${text('source')}></label><textarea id="input-path" rows="3" required spellcheck="false" autocomplete="off"></textarea>
         <div class="selection-actions"><button id="pick-file" type="button" class="secondary" ${text('pickFiles')}></button><button id="pick-folder" type="button" class="secondary" ${text('pickFolders')}></button></div>
+        <section id="draft" class="draft" hidden><div class="records-heading"><strong id="draft-count" role="status"></strong><button id="clear-sources" type="button" class="text-button" ${text('clearSources')}></button></div><ul id="source-list"></ul><p id="source-warning" class="source-warning" role="status"></p></section>
         <div id="output-fields"><label for="output-path" ${text('outputDirectory')}></label><div class="path-row"><input id="output-path" spellcheck="false" autocomplete="off"><button id="pick-output" type="button" class="secondary" ${text('chooseDirectory')}></button></div><p class="field-help" ${text('outputHelp')}></p></div>
         <div class="divider"></div><div class="section-heading"><span class="step">2</span><div><h2 ${text('passwordTitle')}></h2><p ${text('passwordHelp')}></p></div></div>
         <div class="password-grid"><div><label for="password" ${text('password')}></label><input id="password" type="password" required maxlength="256" autocomplete="new-password"></div><div id="confirm-field"><label for="confirm-password" ${text('confirmPassword')}></label><input id="confirm-password" type="password" required maxlength="256" autocomplete="new-password"></div></div>
         <label class="checkbox"><input id="show-password" type="checkbox"><span ${text('showPassword')}></span></label><div class="notice" id="vault-notice"></div>
         <div class="form-footer"><span>Argon2id + AES-256-GCM</span><button class="primary" type="submit" ${text('add')}></button></div>
       </fieldset></form>
-      <section class="records queue"><div class="records-heading"><h2 ${text('queue')}></h2><button id="clear-history" class="text-button" ${text('clearHistory')}></button></div><p class="field-help" ${text('queueHelp')}></p><div class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul></section>
+      <section class="records queue"><div class="records-heading"><h2 ${text('queue')}></h2><button id="clear-history" class="text-button" ${text('clearHistory')}></button></div><p class="field-help" ${text('queueHelp')}></p><div class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul></section>
       <section class="records recovery"><div class="records-heading"><h2 ${text('jobs')}></h2><button id="refresh-jobs" class="text-button" ${text('refreshJobs')}></button></div><p class="field-help" ${text('jobsHelp')}></p><ul id="job-list"></ul></section>
     </section>
     <section id="attributes-panel" hidden>
@@ -43,7 +45,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <label for="attribute-mode" ${text('policy')}></label><select id="attribute-mode"><option value="hidden-readonly" ${text('hiddenReadonly')}></option><option value="hidden" ${text('hidden')}></option><option value="readonly" ${text('readonly')}></option></select><p class="field-help" ${text('attributeHelp')}></p><div class="attribute-actions"><button class="secondary" id="restore-attributes" type="button" ${text('restoreAttributes')}></button><button class="primary" type="submit" ${text('applyAttributes')}></button></div>
       </fieldset></form><div class="records"><div class="records-heading"><h2 ${text('records')}></h2><button id="refresh-records" class="text-button" ${text('refresh')}></button></div><p class="field-help" ${text('recordHelp')}></p><ul id="record-list"></ul><p id="state-location" class="field-help"></p></div>
     </section>
-    <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
+    <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div><section id="diagnostic" class="diagnostic" hidden><details><summary ${text('errorDetails')}></summary><p class="field-help" ${text('diagnosticPrivacy')}></p><pre id="diagnostic-text"></pre><div class="selection-actions"><button id="copy-diagnostic" type="button" class="secondary" ${text('copyDetails')}></button><button id="export-diagnostic" type="button" class="secondary" ${text('exportDetails')}></button></div><p id="diagnostic-status" role="status"></p></details></section><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
   </main>`;
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -66,7 +68,10 @@ let progress: Progress | null = null;
 let startedAt = 0;
 let activeTask: Task | null = null;
 let lastResult: { key?: MessageKey; values?: Record<string, string | number>; code?: string; error: boolean } | null = null;
-let jobs: InterruptedJob[] = [];
+let jobs: RecoveryEntry[] = [];
+let diagnostic: DiagnosticInput | null = null;
+let diagnosticText = '';
+let diagnosticStatus: MessageKey | null = null;
 let snapshot: Snapshot | null = null;
 let initialTasks: Task[] = [];
 try { initialTasks = loadHistory(localStorage.getItem(HISTORY_KEY)); }
@@ -83,7 +88,7 @@ function showError(error: unknown): void {
   console.error('FoldSentinel operation failed', error);
   if (error instanceof Error && error.message === 'storage_failed') { showResult('storageFailed', {}, true); return; }
   if (error instanceof Error && error.message === 'queue_limit') { showResult('queueLimit', {}, true); return; }
-  lastResult = { code: failureCode(error), error: true }; renderResult(); element('result').focus();
+  lastResult = { code: failureCode(error), error: true }; captureDiagnostic(error); renderResult(); element('result').focus();
 }
 function renderResult(): void {
   const box = element('result'); box.hidden = !lastResult;
@@ -91,6 +96,36 @@ function renderResult(): void {
   box.textContent = lastResult.code ? errorText(lastResult.code) : t(lastResult.key!, lastResult.values);
   box.className = lastResult.error ? 'result error' : 'result success'; box.setAttribute('role', lastResult.error ? 'alert' : 'status');
 }
+interface DiagnosticInput { code: string; operation: Operation | null; os_codes: number[] }
+function captureDiagnostic(error: unknown, operation: Operation | null = null): void {
+  if (failureCode(error) === 'cancelled') return;
+  const osCodes = error && typeof error === 'object' && 'os_codes' in error && Array.isArray(error.os_codes) ? error.os_codes : [];
+  diagnostic = { code: failureCode(error), operation, os_codes: osCodes.filter(code => Number.isInteger(code) && code >= 0 && code <= 65535).slice(0, 8) };
+  diagnosticText = JSON.stringify(diagnostic, null, 2); diagnosticStatus = null; renderDiagnostic();
+}
+function renderDiagnostic(): void {
+  element('diagnostic').hidden = diagnostic === null;
+  element('diagnostic-text').textContent = diagnosticText;
+  element('diagnostic-status').textContent = diagnosticStatus ? t(diagnosticStatus) : '';
+}
+element('copy-diagnostic').onclick = () => { void runUi(async () => {
+  if (!diagnostic) return;
+  try {
+    const report = await invoke<string>('diagnostic_report', { request: diagnostic });
+    await navigator.clipboard.writeText(report); diagnosticStatus = 'detailsCopied';
+  } catch (error) { console.error(error); diagnosticStatus = 'detailsFailed'; }
+  renderDiagnostic();
+}); };
+element('export-diagnostic').onclick = () => { void runUi(async () => {
+  const request = diagnostic;
+  if (!request) return;
+  try {
+    const path = await save({ title: t('exportDetails'), defaultPath: 'FoldSentinel-diagnostic.json', filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (!path) return;
+    await invoke('export_diagnostic', { path, request }); diagnosticStatus = 'detailsExported';
+  } catch (error) { console.error(error); diagnosticStatus = 'detailsFailed'; }
+  renderDiagnostic();
+}); };
 function syncControls(): void {
   element<HTMLFieldSetElement>('vault-fields').disabled = uiBusy;
   element<HTMLFieldSetElement>('attribute-fields').disabled = uiBusy || queue.running;
@@ -98,6 +133,7 @@ function syncControls(): void {
   document.querySelectorAll<HTMLButtonElement>('#job-list button').forEach(button => { button.disabled = uiBusy || queue.running; });
   element<HTMLButtonElement>('start-queue').disabled = uiBusy || queue.running || !queue.tasks.some(t => t.status === 'waiting');
   element<HTMLButtonElement>('pause-queue').disabled = !queue.running;
+  element<HTMLButtonElement>('retry-batch').disabled = uiBusy || !queue.tasks.some(task => task.batchId === [...queue.tasks].reverse().find(item => item.batchId)?.batchId && task.status === 'failed');
   for (const mode of ['encrypt', 'decrypt', 'verify']) element<HTMLButtonElement>(`${mode}-tab`).disabled = uiBusy;
   element('activity').textContent = !isTauri() ? t('preview') : queue.running || uiBusy ? t('working') : t('ready');
 }
@@ -125,7 +161,7 @@ function translate(): void {
   element<HTMLSelectElement>('language').value = language;
   element<HTMLTextAreaElement>('input-path').placeholder = t('sourcePlaceholder'); input('output-path').placeholder = t('outputPlaceholder');
   element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
-  modeLabels(); renderTasks(); renderJobs(); renderRecords(); renderResult(); syncControls(); if (progress) updateProgress(progress);
+  modeLabels(); renderSources(); renderTasks(); renderJobs(); renderRecords(); renderResult(); renderDiagnostic(); syncControls(); if (progress) updateProgress(progress);
 }
 element<HTMLSelectElement>('language').onchange = () => {
   const next = element<HTMLSelectElement>('language').value as Language;
@@ -135,10 +171,31 @@ element<HTMLSelectElement>('language').onchange = () => {
 for (const mode of ['encrypt', 'decrypt', 'verify'] as Operation[]) element(`${mode}-tab`).onclick = () => setMode(mode);
 input('show-password').onchange = () => { const type = input('show-password').checked ? 'text' : 'password'; input('password').type = type; input('confirm-password').type = type; };
 
-function setSources(paths: string[]): void { element<HTMLTextAreaElement>('input-path').value = paths.join('\n'); }
+function setSources(paths: string[]): void { element<HTMLTextAreaElement>('input-path').value = paths.join('\n'); renderSources(); }
 function appendSources(paths: string[]): void {
-  setSources(mergeSourcePaths(element<HTMLTextAreaElement>('input-path').value.split(/\r?\n/), paths));
+  const before = inspectSources(element<HTMLTextAreaElement>('input-path').value).paths;
+  const merged = mergeSourcePaths(before, paths);
+  setSources(merged);
+  const duplicates = before.length + paths.length - merged.length;
+  if (duplicates > 0) showResult('duplicatesIgnored', { n: duplicates });
 }
+function renderSources(): void {
+  const draft = inspectSources(element<HTMLTextAreaElement>('input-path').value);
+  element('draft').hidden = draft.paths.length === 0;
+  element('draft-count').textContent = t('selectedCount', { n: draft.paths.length });
+  const list = element('source-list'); list.replaceChildren();
+  for (const path of draft.paths.slice(0, MAX_SOURCES)) {
+    const item = document.createElement('li'); const label = document.createElement('span'); label.textContent = path;
+    const remove = button('removeSource', () => {
+      const next = inspectSources(element<HTMLTextAreaElement>('input-path').value).paths.filter(p => sourceKey(p) !== sourceKey(path));
+      setSources(next); element<HTMLTextAreaElement>('input-path').focus();
+    });
+    remove.setAttribute('aria-label', t('removePath', { path })); item.append(label, remove); list.append(item);
+  }
+  element('source-warning').textContent = [draft.duplicates ? t('duplicatesWarning', { n: draft.duplicates }) : '', draft.overlaps.length ? t('overlapWarning') : '', draft.paths.length > MAX_SOURCES ? t('queueLimit') : ''].filter(Boolean).join('\n');
+}
+element('input-path').oninput = renderSources;
+element('clear-sources').onclick = () => { setSources([]); element('input-path').focus(); };
 async function chooseSources(folder: boolean): Promise<void> {
   await runUi(async () => {
     try { const paths = await open({ directory: folder, multiple: true, title: t(folder ? 'pickFolders' : 'pickFiles') }); if (paths) appendSources(typeof paths === 'string' ? [paths] : paths); }
@@ -155,11 +212,14 @@ element('pick-output').onclick = () => { void runUi(async () => {
 element<HTMLFormElement>('vault-form').onsubmit = event => {
   event.preventDefault();
   if (historyBroken) { showResult('historyInvalid', {}, true); return; }
+  const draft = inspectSources(element<HTMLTextAreaElement>('input-path').value);
+  if (draft.paths.length > MAX_SOURCES) { showResult('queueLimit', {}, true); return; }
+  if (draft.overlaps.length) { showResult('overlapWarning', {}, true); return; }
   if (operation === 'encrypt' && input('password').value !== input('confirm-password').value) { showResult('passwordMismatch', {}, true); input('confirm-password').focus(); return; }
   void runUi(async () => {
-    const paths = element<HTMLTextAreaElement>('input-path').value.split(/\r?\n/).map(p => p.trim()).filter(Boolean);
+    const paths = draft.paths;
     const plans = await invoke<Plan[]>('prepare_tasks', { inputs: paths, operation, directory: operation === 'verify' ? null : input('output-path').value.trim() || null, reserved: queue.tasks.filter(t => ['waiting', 'running'].includes(t.status)).map(t => t.output).filter(Boolean) });
-    queue.add(plans, input('password').value); clearPasswords(); showResult('added', { n: plans.length });
+    queue.add(plans, input('password').value); clearPasswords(); setSources([]); showResult('added', { n: plans.length });
     element('task-list').scrollIntoView({ block: 'nearest' });
   });
 };
@@ -189,6 +249,7 @@ async function perform(task: Task, password: string): Promise<VaultReport> {
   const onProgress = new Channel<Progress>(); onProgress.onmessage = value => { if (activeTask?.id === task.id) updateProgress(value); };
   updateProgress({ phase: 'preparing', completed: 0, total: 0, current: '' });
   try { return await invoke<VaultReport>('vault_operation', { input: task.input, output: task.output ?? '', password, operation: task.operation, onProgress }); }
+  catch (error) { captureDiagnostic(error, task.operation); throw error; }
   finally { activeTask = null; progress = null; element('job-progress').hidden = true; }
 }
 element('start-queue').onclick = () => {
@@ -214,6 +275,19 @@ function renderTasks(): void {
   const list = element('task-list'); list.replaceChildren();
   const count = (status: string) => queue.tasks.filter(t => t.status === status).length;
   element('queue-summary').textContent = t('queueSummary', { waiting: count('waiting'), running: count('running'), done: count('succeeded'), failed: count('failed'), stopped: count('cancelled') + count('interrupted') });
+  const latestBatch = [...queue.tasks].reverse().find(task => task.batchId)?.batchId;
+  const batch = queue.tasks.filter(task => task.batchId === latestBatch && latestBatch !== undefined);
+  element('batch-result').hidden = batch.length === 0;
+  if (batch.length) element('batch-summary').textContent = t('batchSummary', batchSummary(batch));
+  element<HTMLButtonElement>('retry-batch').disabled = uiBusy || !batch.some(task => task.status === 'failed');
+  element('retry-batch').onclick = () => {
+    const failed = batch.filter(task => task.status === 'failed');
+    if (!failed.length) return;
+    page = 'vault'; showPage(); setMode(failed[0].operation); setSources(mergeSourcePaths([], failed.map(task => task.input)));
+    const parents = new Set(failed.map(task => task.output?.replace(/[\\/][^\\/]+$/, '') ?? ''));
+    input('output-path').value = parents.size === 1 ? [...parents][0] : '';
+    clearPasswords(); showResult('retryHelp'); input('password').focus();
+  };
   const ordered = [...queue.tasks.filter(t => ['waiting', 'running'].includes(t.status)), ...queue.tasks.filter(t => !['waiting', 'running'].includes(t.status)).reverse()];
   if (!ordered.length) { const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t('emptyQueue'); list.append(empty); }
   for (const task of ordered) {
@@ -226,25 +300,45 @@ function renderTasks(): void {
     item.append(detail);
     if (task.status === 'waiting') item.append(button('cancel', () => { try { queue.cancelWaiting(task.id); } catch (error) { showError(error); } }));
     else if (['failed', 'cancelled', 'interrupted'].includes(task.status)) item.append(button('retry', () => refill(task)));
+    if (task.status === 'succeeded' && task.output) item.append(button('openOutput', () => { void runUi(async () => { await invoke('open_output_folder', { path: task.output }); }); }));
     list.append(item);
   }
 }
 
 interface InterruptedJob { id: string; input: string; output: string; staging: string; decrypt: boolean }
-async function refreshJobs(): Promise<void> { jobs = await invoke<InterruptedJob[]>('interrupted_jobs'); renderJobs(); }
+interface RecoveryEntry { id: string; status: 'active' | 'cleanable' | 'invalid'; record: InterruptedJob | null; code: string | null }
+async function refreshJobs(): Promise<void> { jobs = await invoke<RecoveryEntry[]>('recovery_entries'); renderJobs(); }
 function renderJobs(): void {
   const list = element('job-list'); list.replaceChildren();
+  const attention = jobs.filter(job => job.status !== 'active').length;
+  element('recovery-alert').hidden = attention === 0;
+  element('recovery-alert-text').textContent = t('recoveryAttention', { n: attention });
   if (!jobs.length) { const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t('emptyJobs'); list.append(empty); }
   for (const job of jobs) {
     const item = document.createElement('li'); item.className = 'recovery-item'; const detail = document.createElement('div');
-    const title = document.createElement('strong'); title.textContent = `${t(job.decrypt ? 'decrypt' : 'encrypt')} · ${job.input}`;
-    const output = document.createElement('p'); output.textContent = t('output', { path: job.output });
-    const staging = document.createElement('p'); staging.textContent = t('staging', { path: job.staging }); detail.append(title, output, staging);
-    const cleanup = button('cleanup', () => { void runUi(async () => { const cleaned = await invoke<InterruptedJob>('cleanup_job', { id: job.id }); refill({ input: cleaned.input, output: cleaned.output, operation: cleaned.decrypt ? 'decrypt' : 'encrypt' }); await refreshJobs(); showResult('cleanupDone'); }); });
-    cleanup.disabled = uiBusy || queue.running; item.append(detail, cleanup); list.append(item);
+    const title = document.createElement('strong'); title.textContent = job.record ? `${t(job.record.decrypt ? 'decrypt' : 'encrypt')} · ${job.record.input}` : job.id;
+    const status = document.createElement('p'); status.textContent = t(job.status === 'active' ? 'recoveryActive' : job.status === 'cleanable' ? 'recoveryCleanable' : 'recoveryInvalid');
+    detail.append(title, status);
+    if (job.record) {
+      const output = document.createElement('p'); output.textContent = t('output', { path: job.record.output });
+      const staging = document.createElement('p'); staging.textContent = t('staging', { path: job.record.staging }); detail.append(output, staging);
+    }
+    item.append(detail);
+    if (job.status === 'cleanable') {
+      const cleanup = button('cleanup', () => { void runUi(async () => {
+        try {
+          const cleaned = await invoke<InterruptedJob>('cleanup_job', { id: job.id });
+          refill({ input: cleaned.input, output: cleaned.output, operation: cleaned.decrypt ? 'decrypt' : 'encrypt' });
+          showResult('cleanupDone');
+        } finally { await refreshJobs(); }
+      }); });
+      cleanup.disabled = uiBusy || queue.running; item.append(cleanup);
+    }
+    list.append(item);
   }
 }
 element('refresh-jobs').onclick = () => { void runUi(refreshJobs); };
+element('review-recovery').onclick = () => { element('job-list').scrollIntoView({ block: 'center' }); element('refresh-jobs').focus(); };
 
 interface Snapshot { entries: { path: string; mode: string }[]; state_path: string }
 async function refreshRecords(): Promise<void> { snapshot = await invoke<Snapshot>('protection_status'); renderRecords(); }

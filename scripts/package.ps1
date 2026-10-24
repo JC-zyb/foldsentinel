@@ -3,15 +3,17 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $projectRoot
 try {
+    & node (Join-Path $PSScriptRoot 'verify-versions.mjs')
+    if ($LASTEXITCODE -ne 0) { throw '版本检查失败' }
     if (-not $SkipBuild) {
         & npm.cmd run tauri build
         if ($LASTEXITCODE -ne 0) { throw '桌面构建失败' }
         & cargo build --release --locked -p foldsentinel
         if ($LASTEXITCODE -ne 0) { throw 'CLI 构建失败' }
     }
-    $artifactDirectory = Join-Path $projectRoot 'artifacts'
-    New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
     $version = (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
+    $artifactDirectory = Join-Path $projectRoot "artifacts/$version"
+    New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
     $portable = Join-Path $artifactDirectory "FoldSentinel_${version}_windows-x64_portable.zip"
     $files = @('target/release/FoldSentinel.exe', 'target/release/foldsentinel-cli.exe', 'README.md', 'LICENSE', 'CHANGELOG.md')
     foreach ($file in $files) {
@@ -27,6 +29,7 @@ try {
         "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
     }
     [System.IO.File]::WriteAllLines((Join-Path $artifactDirectory 'SHA256SUMS.txt'), [string[]]$hashes, [System.Text.UTF8Encoding]::new($false))
+    & (Join-Path $PSScriptRoot 'verify-artifacts.ps1') -Directory $artifactDirectory
     Get-ChildItem -LiteralPath $artifactDirectory -File | Select-Object Name, Length
 } finally {
     Pop-Location

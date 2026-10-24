@@ -189,7 +189,12 @@ fn lock_interrupted(record: &InterruptedJob) -> Result<JobLock> {
 
 fn remove_staging(record: &InterruptedJob) -> Result<()> {
     match fs::symlink_metadata(&record.staging) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // 父目录或卷离线时，不能把无法访问误认为已清理；保留登记供介质恢复后处理。
+            let parent = record.staging.parent().context("临时目录缺少父目录")?;
+            ensure!(fs::metadata(parent)?.is_dir(), "临时数据所在目录不可用");
+            return Ok(());
+        }
         Err(e) => return Err(e).context("读取任务目录失败"),
         Ok(_) => {}
     }
@@ -199,6 +204,18 @@ fn remove_staging(record: &InterruptedJob) -> Result<()> {
         read_marker(&record.staging.join("owner"))? == record.id.as_bytes(),
         "所有者标记无效，拒绝清理"
     );
+    // 先删除数据，最后移除所有者与锁。payload 被占用时必须留下可重新验证的标记。
+    for entry in fs::read_dir(&record.staging).context("枚举临时数据失败")? {
+        let entry = entry?;
+        if entry.file_name() == "owner" || entry.file_name() == "active.lock" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path()).context("删除临时数据子目录失败")?;
+        } else {
+            fs::remove_file(entry.path()).context("删除临时数据文件失败")?;
+        }
+    }
     fs::remove_dir_all(&record.staging).context("删除任务临时目录失败")
 }
 
@@ -238,6 +255,71 @@ pub fn interrupted_jobs(registry: &Path) -> Result<Vec<InterruptedJob>> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStatus {
+    Cleanable,
+    Active,
+    Invalid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecoveryEntry {
+    pub id: String,
+    pub status: RecoveryStatus,
+    pub record: Option<InterruptedJob>,
+    pub code: Option<super::ErrorCode>,
+}
+
+/// 逐条检查并显式呈现异常；检查结果不是删除授权，清理时仍重新验证所有者及活动锁。
+pub fn inspect_jobs(registry: &Path) -> Result<Vec<RecoveryEntry>> {
+    let entries = match fs::read_dir(registry) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("读取恢复记录目录失败"),
+    };
+    let mut inspected = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        ensure!(index < 1000, "恢复记录过多，请检查恢复目录");
+        let path = entry?.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let id = path
+            .file_stem()
+            .context("恢复记录缺少名称")?
+            .to_string_lossy()
+            .into_owned();
+        let result = load_record(registry, &id).and_then(|record| {
+            let status = match lock_interrupted(&record)? {
+                JobLock::Active => RecoveryStatus::Active,
+                JobLock::Idle(_) | JobLock::Missing => RecoveryStatus::Cleanable,
+            };
+            Ok((record, status))
+        });
+        let item = match result {
+            Ok((record, status)) => RecoveryEntry {
+                id,
+                status,
+                record: Some(record),
+                code: None,
+            },
+            Err(error) => {
+                eprintln!("恢复记录检查失败，保留原记录: {error:#}");
+                RecoveryEntry {
+                    id,
+                    status: RecoveryStatus::Invalid,
+                    record: None,
+                    code: Some(super::ErrorCode::Recovery),
+                }
+            }
+        };
+        inspected.push(item);
+    }
+    inspected.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(inspected)
+}
+
 pub fn cleanup_interrupted(registry: &Path, id: &str) -> Result<InterruptedJob> {
     let record = load_record(registry, id)?;
     let _lock = match lock_interrupted(&record)? {
@@ -248,4 +330,114 @@ pub fn cleanup_interrupted(registry: &Path, id: &str) -> Result<InterruptedJob> 
     remove_staging(&record)?;
     fs::remove_file(registry.join(format!("{id}.json"))).context("清理中断记录失败")?;
     Ok(record)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspection_isolates_bad_records_and_rechecks_active_locks() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("jobs");
+        let input = dir.path().join("source");
+        let output = dir.path().join("output");
+        fs::write(&input, b"keep source").unwrap();
+        fs::write(&output, b"keep output").unwrap();
+        let job = Job::create(&input, &output, true, &registry).unwrap();
+        let id = job.record.id.clone();
+        fs::write(job.payload(), b"partial plaintext").unwrap();
+        let damaged = registry.join(".foldsentinel-job-damaged.json");
+        fs::write(&damaged, b"{invalid-json").unwrap();
+        let entries = inspect_jobs(&registry).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries.iter().find(|entry| entry.id == id).unwrap().status,
+            RecoveryStatus::Active
+        );
+        let invalid = entries
+            .iter()
+            .find(|entry| entry.status == RecoveryStatus::Invalid)
+            .unwrap();
+        assert!(invalid.record.is_none());
+        assert_eq!(invalid.code, Some(super::super::ErrorCode::Recovery));
+        assert!(cleanup_interrupted(&registry, &id).is_err());
+        drop(job);
+        assert_eq!(
+            inspect_jobs(&registry)
+                .unwrap()
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap()
+                .status,
+            RecoveryStatus::Cleanable
+        );
+        cleanup_interrupted(&registry, &id).unwrap();
+        assert_eq!(inspect_jobs(&registry).unwrap().len(), 1);
+        assert_eq!(fs::read(damaged).unwrap(), b"{invalid-json");
+        assert_eq!(fs::read(input).unwrap(), b"keep source");
+        assert_eq!(fs::read(output).unwrap(), b"keep output");
+    }
+
+    #[test]
+    fn invalid_owner_cannot_be_cleaned_and_missing_staging_only_removes_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("jobs");
+        let job = Job::create(
+            &dir.path().join("source"),
+            &dir.path().join("output"),
+            false,
+            &registry,
+        )
+        .unwrap();
+        let record = job.record.clone();
+        drop(job);
+        fs::write(record.staging.join("owner"), b"another owner").unwrap();
+        assert_eq!(
+            inspect_jobs(&registry).unwrap()[0].status,
+            RecoveryStatus::Invalid
+        );
+        assert!(cleanup_interrupted(&registry, &record.id).is_err());
+        assert!(record.staging.exists());
+        assert!(registry.join(format!("{}.json", record.id)).exists());
+        fs::write(record.staging.join("owner"), record.id.as_bytes()).unwrap();
+        fs::remove_dir_all(&record.staging).unwrap();
+        assert_eq!(
+            inspect_jobs(&registry).unwrap()[0].status,
+            RecoveryStatus::Cleanable
+        );
+        cleanup_interrupted(&registry, &record.id).unwrap();
+        assert!(inspect_jobs(&registry).unwrap().is_empty());
+        assert!(inspect_jobs(&dir.path().join("absent")).unwrap().is_empty());
+        fs::write(dir.path().join("not-directory"), b"x").unwrap();
+        assert!(inspect_jobs(&dir.path().join("not-directory")).is_err());
+    }
+
+    #[test]
+    fn missing_parent_is_not_treated_as_successfully_cleaned() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("volume");
+        fs::create_dir(&parent).unwrap();
+        let registry = dir.path().join("jobs");
+        let job = Job::create(
+            &dir.path().join("source"),
+            &parent.join("output"),
+            false,
+            &registry,
+        )
+        .unwrap();
+        let record = job.record.clone();
+        drop(job);
+        let offline = dir.path().join("offline");
+        fs::rename(&parent, &offline).unwrap();
+        assert!(remove_staging(&record).is_err());
+        assert_eq!(
+            inspect_jobs(&registry).unwrap()[0].status,
+            RecoveryStatus::Invalid
+        );
+        assert!(registry.join(format!("{}.json", record.id)).exists());
+        fs::rename(offline, parent).unwrap();
+        cleanup_interrupted(&registry, &record.id).unwrap();
+        assert!(inspect_jobs(&registry).unwrap().is_empty());
+    }
 }

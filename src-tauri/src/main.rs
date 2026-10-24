@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
+mod support;
 
 #[derive(Serialize)]
 struct Snapshot {
@@ -19,6 +20,7 @@ struct ActiveJob(Mutex<Option<vault::Control>>);
 #[derive(Debug, Serialize)]
 struct UiError {
     code: vault::ErrorCode,
+    os_codes: Vec<i32>,
 }
 
 impl UiError {
@@ -26,12 +28,22 @@ impl UiError {
         eprintln!("后台或本地状态错误: {error}");
         Self {
             code: vault::ErrorCode::Internal,
+            os_codes: Vec::new(),
         }
     }
     fn vault(error: anyhow::Error) -> Self {
         eprintln!("文件操作错误: {error:#}");
         Self {
             code: vault::error_code(&error),
+            os_codes: error
+                .chain()
+                .filter_map(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .and_then(|io| io.raw_os_error())
+                })
+                .take(8)
+                .collect(),
         }
     }
 }
@@ -80,6 +92,7 @@ async fn vault_operation(
         if current.is_some() {
             return Err(UiError {
                 code: vault::ErrorCode::Busy,
+                os_codes: Vec::new(),
             });
         }
         *current = Some(control.clone());
@@ -112,15 +125,11 @@ fn cancel_vault(active: State<'_, ActiveJob>) -> Result<bool, UiError> {
 }
 
 #[tauri::command]
-async fn interrupted_jobs() -> Result<Vec<vault::recovery::InterruptedJob>, UiError> {
+async fn recovery_entries() -> Result<Vec<vault::recovery::RecoveryEntry>, UiError> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = vault::recovery::default_recovery_dir().map_err(UiError::vault)?;
-        vault::recovery::interrupted_jobs(&root).map_err(|e| {
-            eprintln!("中断记录错误: {e:#}");
-            UiError {
-                code: vault::ErrorCode::Recovery,
-            }
-        })
+        vault::recovery::inspect_jobs(&root)
+            .map_err(|e| UiError::vault(e.context(vault::ErrorCode::Recovery)))
     })
     .await
     .map_err(UiError::internal)?
@@ -130,15 +139,26 @@ async fn interrupted_jobs() -> Result<Vec<vault::recovery::InterruptedJob>, UiEr
 async fn cleanup_job(id: String) -> Result<vault::recovery::InterruptedJob, UiError> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = vault::recovery::default_recovery_dir().map_err(UiError::vault)?;
-        vault::recovery::cleanup_interrupted(&root, &id).map_err(|e| {
-            eprintln!("中断清理错误: {e:#}");
-            UiError {
-                code: vault::ErrorCode::Recovery,
-            }
-        })
+        vault::recovery::cleanup_interrupted(&root, &id)
+            .map_err(|e| UiError::vault(e.context(vault::ErrorCode::Recovery)))
     })
     .await
     .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+fn diagnostic_report(request: support::DiagnosticRequest) -> Result<String, UiError> {
+    support::diagnostic_report(&request).map_err(UiError::vault)
+}
+
+#[tauri::command]
+fn export_diagnostic(path: PathBuf, request: support::DiagnosticRequest) -> Result<(), UiError> {
+    support::export_diagnostic(&path, &request).map_err(UiError::vault)
+}
+
+#[tauri::command]
+fn open_output_folder(path: PathBuf) -> Result<(), UiError> {
+    support::open_output_folder(&path).map_err(UiError::vault)
 }
 
 #[tauri::command]
@@ -190,8 +210,11 @@ fn main() {
             prepare_tasks,
             vault_operation,
             cancel_vault,
-            interrupted_jobs,
+            recovery_entries,
             cleanup_job,
+            diagnostic_report,
+            export_diagnostic,
+            open_output_folder,
             attribute_operation,
             protection_status
         ])

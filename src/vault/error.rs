@@ -1,8 +1,8 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{fmt, io};
 
 /// IPC 使用稳定类别，不依赖底层中文或系统本地化错误文本。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     Cancelled,
@@ -44,13 +44,16 @@ impl fmt::Display for ErrorCode {
 impl std::error::Error for ErrorCode {}
 
 pub fn error_code(error: &anyhow::Error) -> ErrorCode {
-    if error
-        .chain()
-        .any(|cause| cause.downcast_ref::<ErrorCode>() == Some(&ErrorCode::Recovery))
+    // anyhow 的类型化 context 不一定作为独立的 std::error::Error 链节点出现。
+    let contextual = error.downcast_ref::<ErrorCode>().copied();
+    if contextual == Some(ErrorCode::Recovery)
+        || error
+            .chain()
+            .any(|cause| cause.downcast_ref::<ErrorCode>() == Some(&ErrorCode::Recovery))
     {
         return ErrorCode::Recovery;
     }
-    let mut code = None;
+    let mut code = contextual;
     let mut io_failure = false;
     for cause in error.chain() {
         if let Some(value) = cause.downcast_ref::<ErrorCode>() {
