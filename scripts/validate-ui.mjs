@@ -64,19 +64,89 @@ try {
       await page.locator('#nav-attributes').click();
       for (const language of ['zh-CN', 'en']) {
         await page.locator('#language').selectOption(language);
+        await page.evaluate(() => scrollTo(0, 0));
+        assert.equal(await page.locator('#attribute-form').isVisible(), false, '添加表单默认收起');
+        const addEntry = await page.locator('#pick-attribute-file').boundingBox();
+        assert.ok(addEntry && addEntry.y >= 0 && addEntry.y + addEntry.height <= 820, '添加入口在首屏可见');
+        await page.locator('#open-attribute-form').click();
+        assert.equal(await page.locator('#attribute-form').isVisible(), true);
+        await page.locator('#attribute-path').fill('D:\\private-parent\\private-child.txt');
+        await page.locator('#cancel-attribute-add').click();
+        assert.equal(await page.locator('#attribute-form').isVisible(), false, '取消添加关闭面板');
+        assert.equal(await page.locator('#attribute-path').inputValue(), '', '取消添加清空新选择路径');
         // 合成数据只用于真实组件的排版检查，不接入 IPC 或模拟成功属性操作。
         await page.evaluate(async () => {
-          const { createRootRecord } = await import('/ui/attributes.ts');
+          const { createRootRecord, syncRootControls } = await import('/ui/attributes.ts');
           const roots = document.querySelector('#root-list');
           // 故意附加旧字段，确保真实渲染组件也不把它们写进文本、title、aria 或表单。
-          const record = { id: 'private-internal-id', name: '中文最外层名称'.repeat(18), path: 'D:\\private-parent\\private-child.txt', entry_count: 54 };
-          roots.replaceChildren(createRootRecord(record, () => {}), createRootRecord({ id: 'second-id', name: '<img src=x onerror=alert(1)>.txt' }, () => {}));
+          const record = { id: 'synthetic-root', name: '中文最外层名称'.repeat(18), mode: 'hidden-locked', note: '工作资料', duplicate_name: true, path: 'D:\\private-parent\\private-child.txt', entry_count: 54 };
+          window.selectedProtectionMode = null;
+          window.savedProtectionNote = null;
+          roots.replaceChildren(
+            createRootRecord(record, () => {}, mode => { window.selectedProtectionMode = mode; }, {
+              verify: () => {}, saveNote: note => { window.savedProtectionNote = note; },
+              feedback: { text: '布局反馈 / Layout feedback' },
+              verification: { state: 'consistent', checked_at: 1793095200000 }
+            }),
+            createRootRecord({ id: 'second-id', name: '<img src=x onerror=alert(1)>.txt', mode: 'hidden-readonly' }, () => {}, () => {}),
+            createRootRecord({ id: 'mixed-id', name: '混合方式', mode: null }, () => {}, mode => { window.selectedProtectionMode = mode; })
+          );
+          syncRootControls(roots, false, false);
+        });
+        assert.deepEqual(await page.locator('#attribute-mode option').evaluateAll(options => options.map(option => option.value)), ['none', 'hidden', 'locked', 'readonly', 'readonly-acl', 'hidden-locked']);
+        const first = page.locator('#root-list .root-record').first();
+        const mixed = page.locator('#root-list .root-record').nth(2);
+        await first.locator('[data-root-action="expand-name"]').click();
+        assert.equal(await first.locator('[data-root-action="expand-name"]').getAttribute('aria-expanded'), 'true');
+        await first.locator('[data-root-action="expand-name"]').click();
+        assert.equal(await mixed.locator('[data-root-action="apply"]').isDisabled(), true, '混合方式必须先选择具体模式');
+        await mixed.locator('select').selectOption('hidden');
+        assert.equal(await mixed.locator('.root-mode-pending').isVisible(), true, '修改后显示未应用');
+        assert.equal(await mixed.locator('[data-root-action="apply"]').isEnabled(), true);
+        await first.locator('select').selectOption('locked');
+        await first.locator('[data-root-action="apply"]').click();
+        assert.equal(await page.evaluate(() => window.selectedProtectionMode), 'locked');
+        assert.equal(await first.locator('[data-root-action="apply"]').evaluate(button => document.activeElement === button), true, '行操作回调不应抢焦点');
+        await first.locator('[data-root-action="edit-note"]').click();
+        const note = first.locator('.root-note-editor input');
+        await note.fill('a'.repeat(81));
+        assert.equal(await first.locator('[data-root-action="save-note"]').isDisabled(), true, '按Unicode字符限制备注长度');
+        await note.fill('😀'.repeat(80));
+        assert.equal(await first.locator('[data-root-action="save-note"]').isEnabled(), true, '80个Unicode字符可保存，不能按UTF-16长度误拒绝');
+        await note.fill('同名项目备注');
+        await first.locator('[data-root-action="save-note"]').click();
+        assert.equal(await page.evaluate(() => window.savedProtectionNote), '同名项目备注');
+        await first.locator('[data-root-action="cancel-note"]').click();
+        await page.evaluate(async () => {
+          const { createRootRecord, syncRootControls } = await import('/ui/attributes.ts');
+          let draft = '保存失败后仍保留的备注';
+          const row = createRootRecord({ id: 'draft-id', name: '资料', mode: 'hidden', note: '旧备注' }, () => {}, () => {}, {
+            saveNote: () => {}, noteDraft: draft, onNoteDraft: value => { draft = value; }
+          });
+          document.querySelector('#root-list').append(row);
+          const input = row.querySelector('.root-note-editor input');
+          if (row.querySelector('.root-note-editor').hidden || input.value !== draft) throw new Error('重建记录时必须恢复未保存备注');
+          syncRootControls(row, true, false); syncRootControls(row, false, true); syncRootControls(row, false, false);
+          if (input.value !== draft) throw new Error('忙碌或刷新失败不能清空备注草稿');
+          row.querySelector('[data-root-action="cancel-note"]').click();
+          if (draft !== undefined) throw new Error('取消编辑必须清除备注草稿');
+          row.remove();
+        });
+        await page.evaluate(async () => {
+          const { syncRootControls } = await import('/ui/attributes.ts');
+          syncRootControls(document.querySelector('#root-list'), false, true);
+        });
+        assert.equal(await first.locator('[data-root-action="restore"]').isDisabled(), true, '过期视图不可操作恢复');
+        assert.equal(await first.locator('[data-root-action="expand-name"]').isEnabled(), true, '过期视图仍可展开名称');
+        await page.evaluate(async () => {
+          const { syncRootControls } = await import('/ui/attributes.ts');
+          syncRootControls(document.querySelector('#root-list'), false, false);
         });
         assert.equal(await page.locator('#record-list, #state-location').count(), 0, '内部明细和状态文件位置不进入页面');
-        assert.equal(await page.locator('#root-list .root-record').count(), 2);
+        assert.equal(await page.locator('#root-list .root-record').count(), 3);
         assert.equal(await page.locator('#root-list img').count(), 0, '最外层名称必须按文本显示');
         const markup = await page.locator('#attributes-panel').evaluate(element => element.outerHTML);
-        for (const secret of ['private-parent', 'private-child', 'private-internal-id', 'state.json']) assert.ok(!markup.includes(secret), `属性页面不得包含 ${secret}`);
+        for (const secret of ['private-parent', 'private-child', 'state.json']) assert.ok(!markup.includes(secret), `属性页面不得包含 ${secret}`);
         assert.equal(await page.locator('#attribute-path').inputValue(), '');
         assert.ok(!(await page.locator('#root-list').ariaSnapshot()).includes('private-'), '可访问性标签不得暴露隐藏明细');
         const layout = await page.evaluate(() => ({
@@ -90,7 +160,7 @@ try {
         assert.deepEqual(layout.outside, [], JSON.stringify({ width, scale, language, layout }));
         const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
-        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, screenshot });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, screenshot });
       }
       await page.locator('#language').focus();
       await page.keyboard.press('Tab');

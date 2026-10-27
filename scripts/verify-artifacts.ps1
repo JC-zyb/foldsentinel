@@ -21,12 +21,12 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $directoryPath $expected[0]))
 try {
     $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($required in @('FoldSentinel.exe', 'foldsentinel-cli.exe', 'README.md', 'LICENSE', 'CHANGELOG.md', 'docs/FORMAT.md', 'docs/INSTALL.md', 'docs/VALIDATION.md')) {
+    foreach ($required in @('FoldSentinel.exe', 'foldsentinel-cli.exe', 'foldsentinel-service.exe', 'manage-protection-service.ps1', 'README.md', 'LICENSE', 'CHANGELOG.md', 'docs/FORMAT.md', 'docs/INSTALL.md', 'docs/VALIDATION.md', 'docs/SERVICE.md')) {
         if ($required -notin $names) { throw "便携包缺少文件: $required" }
     }
     if (($names | Select-Object -Unique).Count -ne $names.Count) { throw '便携包包含重复路径' }
     foreach ($name in $names) {
-        if ($name -match '(^/|(^|/)\.\.(/|$)|:)' -or ($name -notin @('FoldSentinel.exe', 'foldsentinel-cli.exe', 'README.md', 'LICENSE', 'CHANGELOG.md') -and -not $name.StartsWith('docs/'))) {
+        if ($name -match '(^/|(^|/)\.\.(/|$)|:)' -or ($name -notin @('FoldSentinel.exe', 'foldsentinel-cli.exe', 'foldsentinel-service.exe', 'manage-protection-service.ps1', 'README.md', 'LICENSE', 'CHANGELOG.md') -and -not $name.StartsWith('docs/'))) {
             throw "便携包含意外文件或不安全路径: $name"
         }
     }

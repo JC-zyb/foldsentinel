@@ -1,0 +1,16 @@
+{
+  "ignored_auto_inheritance_metadata_only": true,
+  "passed": true,
+  "content_acl_and_attributes_restored": true,
+  "separate_process_per_operation": true,
+  "state_version": 3,
+  "raw_sddl_identical": false,
+  "steps": [
+    "hidden-locked",
+    "locked",
+    "hidden",
+    "readonly",
+    "none"
+  ],
+  "tested_at": "2026-10-27T17:48:56.0598429+08:00"
+}

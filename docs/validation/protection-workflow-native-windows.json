@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-27T18:28:47.9576227+08:00",
+  "executable_sha256": "D10201C40172D008B393E7F86849448B493A941D88E3BDFC715A4CE76138ACE8",
+  "isolated": true,
+  "observations": [
+    "Two same-name roots displayed separately",
+    "Note saved through native UI and found in recovery state",
+    "Search by note returned one root",
+    "Explicit check initially matched record",
+    "Removing managed attributes externally changed native check result to changed",
+    "Manual add did not modify files until Apply",
+    "Default hidden-locked applied through native UI and fresh-process content read was denied",
+    "Restart preserved three roots and note, verification reset to unchecked",
+    "Restoring the new locked file through native UI removed its record and restored readable content and original visibility",
+    "Remaining same-name records and note were preserved"
+  ],
+  "restored_file_content": "new-ui-fixture",
+  "remaining_roots_before_fixture_cleanup": 2,
+  "limitations": [
+    "Current native window and current system scale only",
+    "No native cross-window drag test",
+    "No installer upgrade, clean VM or remote CI verification",
+    "Initial offscreen restore click was rejected by UI automation; scrolled to visible control and retried successfully"
+  ]
+}

@@ -18,6 +18,16 @@ pub enum ErrorCode {
     SourceChanged,
     Busy,
     Recovery,
+    ProtectionConflict,
+    ProtectionLocation,
+    ProtectionUnsupported,
+    ProtectionInput,
+    ProtectionRecordChanged,
+    ProtectionBackupInvalid,
+    ProtectionBackupConflict,
+    ServiceUnavailable,
+    ProtectionLocalOverlap,
+    ProtectionServiceOverlap,
     Internal,
 }
 
@@ -37,6 +47,22 @@ impl fmt::Display for ErrorCode {
             Self::SourceChanged => "源文件在操作期间发生变化",
             Self::Busy => "已有任务正在运行",
             Self::Recovery => "中断记录或临时数据处理失败",
+            Self::ProtectionConflict => {
+                "文件身份、权限或父目录继承已变化；请保留恢复记录，并从最外层项目恢复"
+            }
+            Self::ProtectionLocation => "此位置不能保护，请选择普通文件或子文件夹",
+            Self::ProtectionUnsupported => "此项目不支持当前保护方式，请检查文件系统或链接类型",
+            Self::ProtectionInput => "保护项目或备注不合法，请检查输入后重试",
+            Self::ProtectionRecordChanged => "保护记录已变化，请刷新列表后重试",
+            Self::ProtectionBackupInvalid => "备份无效、已被修改，或不属于本机当前 Windows 账户",
+            Self::ProtectionBackupConflict => "当前已有保护记录，不能通过导入备份覆盖",
+            Self::ServiceUnavailable => "本机保护服务未安装、未运行或无法验证身份，请检查服务状态",
+            Self::ProtectionLocalOverlap => {
+                "此范围已有本地保护记录，请先从本地恢复入口解除，再登记服务保护"
+            }
+            Self::ProtectionServiceOverlap => {
+                "此范围已有服务保护，请先验证密码并解除服务保护，再使用本地入口"
+            }
             Self::Internal => "后台任务或本地状态处理失败",
         })
     }
@@ -52,6 +78,13 @@ pub fn error_code(error: &anyhow::Error) -> ErrorCode {
             .any(|cause| cause.downcast_ref::<ErrorCode>() == Some(&ErrorCode::Recovery))
     {
         return ErrorCode::Recovery;
+    }
+    if contextual == Some(ErrorCode::ServiceUnavailable)
+        || error
+            .chain()
+            .any(|cause| cause.downcast_ref::<ErrorCode>() == Some(&ErrorCode::ServiceUnavailable))
+    {
+        return ErrorCode::ServiceUnavailable;
     }
     let mut code = contextual;
     let mut io_failure = false;

@@ -1,0 +1,86 @@
+{
+  "date": "2026-10-27",
+  "platform": "Windows 11 x64",
+  "service": "FoldSentinelProtection",
+  "service_identity": "LocalSystem",
+  "service_start": "Automatic",
+  "service_sha256": "E28DBCE801C61136379A4D89C0FF05A10ADD1398CDA334966D8CB327835ADD8B",
+  "gui_sha256": "4AB1FED484F63F50B2E6E3C1A32F4DB03CBD24523D83A623F04AFE5A308D3140",
+  "client": "普通账户、真实生产管道",
+  "passed": true,
+  "checks": [
+    {
+      "name": "SYSTEM登记权限只读，可读且拒写/新建",
+      "passed": true
+    },
+    {
+      "name": "错误密码不修改状态或权限",
+      "passed": true
+    },
+    {
+      "name": "服务范围拒绝本地叠加",
+      "passed": true
+    },
+    {
+      "name": "默认五分钟，正确验证可写，立即重锁并登记新增项",
+      "passed": true
+    },
+    {
+      "name": "GUI关闭时SYSTEM后台修复ACL漂移",
+      "passed": true
+    },
+    {
+      "name": "真实时钟截止后服务自动重锁",
+      "passed": true
+    },
+    {
+      "name": "SCM restart 后恢复未完成临时访问并重锁",
+      "passed": true
+    },
+    {
+      "name": "SCM crash 后恢复未完成临时访问并重锁",
+      "passed": true
+    },
+    {
+      "name": "响应不含父路径、子文件名、ACL或密码",
+      "passed": true
+    },
+    {
+      "name": "解除保留内容并恢复可写，当前账户无服务残留",
+      "passed": true
+    },
+    {
+      "name": "本地先登记拒绝服务叠加，解除成功",
+      "passed": true
+    },
+    {
+      "name": "SYSTEM隐藏并锁定拒读，解除后内容不变",
+      "passed": true
+    }
+  ],
+  "scm_events": [
+    {
+      "Running": true,
+      "StoppedRelocked": true,
+      "Phase": "stop-start"
+    },
+    {
+      "NewPid": 30968,
+      "Running": true,
+      "OldPid": 16484,
+      "Phase": "crash-auto-restart"
+    }
+  ],
+  "native_gui": {
+    "registration_button_enabled": true,
+    "connected": true,
+    "status_text": "已连接本机 SYSTEM 保护服务",
+    "scope": "只验证真实连接与入口，未通过原生UI登记或提交密码"
+  },
+  "cleanup": "所有本次服务夹具已解除，内容保留可写，当前账户服务登记为空；服务按用户确认保留运行",
+  "limitations": [
+    "未验证第二Windows账户",
+    "未验证整机重启；已验证服务停止/启动及异常退出自动恢复",
+    "未验证原生多档DPI、当前改动跨窗口拖放、GUI安装升级卸载或当前提交远程CI"
+  ]
+}

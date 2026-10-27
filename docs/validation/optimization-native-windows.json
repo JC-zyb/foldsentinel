@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-27",
+  "platform": "Windows / NTFS / 当前账户 / 原生 Tauri WebView2",
+  "binary_sha256": "8F76A4F44BEF8C357E8C3F914971ED01042C4DB44EED41750E1B1C685C7D2967",
+  "scope": "权限只读、备注、失败重试、批量核验/恢复及本机备份；此二进制不含后续正在开发的服务界面",
+  "isolated_fixture": "work/optimization-native-20261027",
+  "checks": [
+    { "name": "initial_note_saved_with_real_acl_protection", "passed": true, "evidence": "GUI填写第一份资料，实际状态与重启列表均保留备注和readonly-acl模式" },
+    { "name": "permission_readonly_real_io", "passed": true, "evidence": "原内容读取正常，以写访问打开被UnauthorizedAccessException拒绝" },
+    { "name": "missing_path_error_visible_and_retryable", "passed": true, "evidence": "原生错误返回成功0项失败1项、逐项原因、重试失败项；错误日志确认为元数据os error 2" },
+    { "name": "retry_preserves_original_mode", "passed": true, "evidence": "创建缺失夹具后把下拉改不保护，点击重试仍为hidden-locked、实际读取拒绝；已有readonly-acl记录及备注保持" },
+    { "name": "selected_batch_verification", "passed": true, "evidence": "选择当前页2项，显示成功2项失败0项，两项与记录一致" },
+    { "name": "native_backup_save_and_sealed_content", "passed": true, "evidence": "原生保存对话框写入8650字节备份，反馈2根2条；备份无资料名称和测试父路径明文", "backup_sha256": "D050269665B90AF950F52C7F86EC2F9AA7716E58B12FED1BC5B98673EFAC86BE" },
+    { "name": "import_after_primary_state_loss", "passed": true, "evidence": "停止仅夹具进程，保留主记录为夹具副本，保持文件受保护；重启为空，经原生打开对话框及明确确认导入，2条及备注恢复" },
+    { "name": "selected_restore_confirmation", "passed": true, "evidence": "确认面板明确列出2项、资料.txt与第一份资料备注、未创建.txt，不含父路径" },
+    { "name": "selected_restore_real_io", "passed": true, "evidence": "确认后成功2项失败0项，状态根/条目均0；first-original-content与retry-original-content完整且可写打开" }
+  ],
+  "limitations": [
+    "首次隔离启动使用无读取端继承输出管道，错误日志写入使IPC等待；改为捕获stdout/stderr文件后相同错误正常返回。属于夹具启动诊断，不记为产品修复。",
+    "未在本次原生流程重测同名全量预检、部分成功的最终计数或手动草稿；这些有独立核心/组件/先前原生证据，不冒充本次通过。",
+    "未安装或运行SYSTEM服务，未验证第二账户、系统原生100/125/150 DPI、当前改动的安装升级卸载或远程CI。"
+  ]
+}

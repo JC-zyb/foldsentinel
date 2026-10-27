@@ -1,4 +1,4 @@
-param([switch]$SkipBuild)
+param([switch]$SkipBuild, [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $projectRoot
@@ -9,13 +9,13 @@ try {
         & npm.cmd run tauri build
         if ($LASTEXITCODE -ne 0) { throw '桌面构建失败' }
         & cargo build --release --locked -p foldsentinel
-        if ($LASTEXITCODE -ne 0) { throw 'CLI 构建失败' }
+        if ($LASTEXITCODE -ne 0) { throw 'CLI 与保护服务构建失败' }
     }
     $version = (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
-    $artifactDirectory = Join-Path $projectRoot "artifacts/$version"
+    $artifactDirectory = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory, $projectRoot) } else { Join-Path $projectRoot "artifacts/$version" }
     New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
     $portable = Join-Path $artifactDirectory "FoldSentinel_${version}_windows-x64_portable.zip"
-    $files = @('target/release/FoldSentinel.exe', 'target/release/foldsentinel-cli.exe', 'README.md', 'LICENSE', 'CHANGELOG.md')
+    $files = @('target/release/FoldSentinel.exe', 'target/release/foldsentinel-cli.exe', 'target/release/foldsentinel-service.exe', 'scripts/manage-protection-service.ps1', 'README.md', 'LICENSE', 'CHANGELOG.md')
     foreach ($file in $files) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少交付文件: $file" }
     }

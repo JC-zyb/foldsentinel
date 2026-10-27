@@ -187,13 +187,14 @@ async fn attribute_operation(
     path: String,
     mode: ProtectionMode,
     restore: bool,
+    note: Option<String>,
 ) -> Result<OperationReport, UiError> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         let result = if restore {
             store.unprotect(&PathBuf::from(path))
         } else {
-            store.protect(&PathBuf::from(path), mode)
+            store.protect_with_note(&PathBuf::from(path), mode, note.as_deref())
         };
         result.map_err(UiError::vault)
     })
@@ -202,10 +203,69 @@ async fn attribute_operation(
 }
 
 #[tauri::command]
-async fn protection_status(offset: usize) -> Result<attributes::Snapshot, UiError> {
+async fn preview_protection_add(
+    paths: Vec<String>,
+) -> Result<Vec<attributes::AddPreview>, UiError> {
     tauri::async_runtime::spawn_blocking(move || {
         let store = StateStore::load_default().map_err(UiError::vault)?;
-        Ok(attributes::snapshot(&store, offset))
+        attributes::preview_add(&store, &paths).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn export_protection_backup(path: PathBuf) -> Result<foldsentinel::BackupReport, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = StateStore::load_default().map_err(UiError::vault)?;
+        store.export_backup(&path).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn import_protection_backup(path: PathBuf) -> Result<foldsentinel::BackupReport, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = StateStore::load_default().map_err(UiError::vault)?;
+        store.import_backup(&path).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn protection_status(
+    offset: usize,
+    query: Option<String>,
+) -> Result<attributes::Snapshot, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = StateStore::load_default().map_err(UiError::vault)?;
+        Ok(attributes::snapshot(
+            &store,
+            offset,
+            query.as_deref().unwrap_or(""),
+        ))
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn verify_protection(id: String) -> Result<attributes::Verification, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::verify(&store, &id).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn set_protection_note(id: String, note: String) -> Result<(), UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::set_note(&mut store, &id, &note).map_err(UiError::vault)
     })
     .await
     .map_err(UiError::internal)?
@@ -216,6 +276,47 @@ async fn restore_attributes(id: String) -> Result<OperationReport, UiError> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         attributes::restore(&mut store, &id).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn set_protection_mode(id: String, mode: ProtectionMode) -> Result<OperationReport, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::apply(&mut store, &id, mode).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn managed_protection(
+    command: foldsentinel::service::Command,
+) -> Result<foldsentinel::service::Response, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let registration_guard =
+            if let foldsentinel::service::Command::Enroll { path, .. } = &command {
+                let store = StateStore::load_default().map_err(UiError::vault)?;
+                store
+                    .ensure_service_registration_available(path)
+                    .map_err(UiError::vault)?;
+                Some(store)
+            } else {
+                None
+            };
+        // 同一账户的本地变更须等服务登记完成，避免检查后交错写入。
+        let _registration_guard = registration_guard;
+        foldsentinel::service::request(&foldsentinel::service::Request::new(command)).map_err(
+            |error| {
+                eprintln!("连接本机保护服务失败: {error:#}");
+                UiError {
+                    code: vault::ErrorCode::ServiceUnavailable,
+                    os_codes: Vec::new(),
+                }
+            },
+        )
     })
     .await
     .map_err(UiError::internal)?
@@ -244,7 +345,14 @@ fn main() {
             export_diagnostic,
             open_output_folder,
             attribute_operation,
+            managed_protection,
+            preview_protection_add,
+            export_protection_backup,
+            import_protection_backup,
             protection_status,
+            verify_protection,
+            set_protection_note,
+            set_protection_mode,
             restore_attributes
         ])
         .run(tauri::generate_context!())

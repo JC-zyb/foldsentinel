@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-27",
+  "scope": "最新 release 桌面程序，隔离 APPDATA 与 WebView2，仅验证服务缺失时的真实 IPC 与界面",
+  "binary_sha256": "9EBB6B739D96ACDE8269B825B6B278CCEC013E4BDC7DD36C7664CF804D58E503",
+  "service_name": "FoldSentinelProtection",
+  "service_installed": false,
+  "checks": [
+    { "name": "文件保护页提供 SYSTEM 服务与密码访问入口", "passed": true },
+    { "name": "原生入口定位到服务面板，中文布局无水平溢出", "passed": true },
+    { "name": "真实管道连接失败显示服务尚未连接及具体检查提示", "passed": true },
+    { "name": "服务不可用时登记服务保护按钮禁用", "passed": true },
+    { "name": "状态读取结束后刷新服务状态按钮可用", "passed": true },
+    { "name": "空服务列表明确本地记录不会自动迁移，不显示持续防护成功", "passed": true }
+  ],
+  "cleanup": "核对进程路径后仅停止本次隔离 GUI；未安装服务或操作用户文件",
+  "limitations": [
+    "本项未执行服务登记、密码验证或真实 SYSTEM 文件操作",
+    "SCM 安装、第二账户、系统重启与卸载仍未验证",
+    "当前窗口与系统缩放不代表原生 100%/125%/150% DPI 全部通过"
+  ]
+}

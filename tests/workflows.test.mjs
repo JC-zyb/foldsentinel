@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
 import { previewPage, PREVIEW_PAGE_SIZE } from '../ui/preview.ts';
+import { ProtectionRecords, runProtectionAction, runProtectionBatch, validProtectionNote } from '../ui/protection-workflow.ts';
+import { managedResponse, managedStatus, requestManaged, validManagedPassword } from '../ui/managed-workflow.ts';
 
 test('separate selections accumulate files and folders without duplicate Windows paths', () => {
   const file = String.raw`D:\work\alpha.txt`;
@@ -139,4 +141,122 @@ test('v0.4 task descriptors survive upgrade while preview contents are never per
   assert.equal(loaded[1].code, 'authentication');
   assert.equal(serializeHistory(loaded).includes('sensitive-name'), false);
   assert.equal(serializeHistory(loaded).includes('preview'), false);
+});
+
+test('protection refresh failure keeps recoverable records and retry clears stale state', async () => {
+  const records = new ProtectionRecords();
+  const saved = { roots: [{ id: 'saved-item', name: '资料' }], total: 1 };
+  await records.refresh(async () => saved);
+  const failure = { code: 'permission_denied' };
+  await assert.rejects(records.refresh(async () => { throw failure; }), error => error === failure);
+  assert.equal(records.snapshot, saved, '读取失败不能清空恢复入口');
+  assert.equal(records.stale, true);
+  assert.equal(records.error, failure);
+  assert.equal(records.loading, false);
+  await records.refresh(async () => ({ roots: [], total: 0 }));
+  assert.deepEqual(records.snapshot, { roots: [], total: 0 }, '成功取得空记录与读取失败不同');
+  assert.equal(records.stale, false);
+  assert.equal(records.error, null);
+});
+
+test('protection refresh preserves displayed snapshot while loading and rejects overlapping reads', async () => {
+  const records = new ProtectionRecords();
+  const saved = { roots: ['first'] };
+  await records.refresh(async () => saved);
+  let finish;
+  const next = records.refresh(() => new Promise(resolve => { finish = resolve; }));
+  assert.equal(records.loading, true);
+  assert.equal(records.snapshot, saved);
+  let secondReadStarted = false;
+  await assert.rejects(records.refresh(async () => { secondReadStarted = true; return {}; }), /busy/);
+  assert.equal(secondReadStarted, false, '并发刷新不得抢先覆盖较新快照');
+  finish({ roots: ['next'] });
+  await next;
+  assert.deepEqual(records.snapshot, { roots: ['next'] });
+  assert.equal(records.loading, false);
+});
+
+test('protection action and index refresh retain separate outcomes on every failure combination', async () => {
+  const operationError = { code: 'protection_conflict' };
+  const refreshError = { code: 'permission_denied' };
+  for (const operationFails of [false, true]) {
+    for (const refreshFails of [false, true]) {
+      const calls = [];
+      const result = await runProtectionAction(async () => {
+        calls.push('operation'); if (operationFails) throw operationError;
+      }, async () => {
+        calls.push('refresh'); if (refreshFails) throw refreshError;
+      });
+      assert.deepEqual(calls, ['operation', 'refresh'], '操作失败后也读取实际登记结果');
+      assert.equal(result.operationSucceeded, !operationFails);
+      assert.equal(result.refreshSucceeded, !refreshFails);
+      assert.equal(result.operationError, operationFails ? operationError : undefined);
+      assert.equal(result.refreshError, refreshFails ? refreshError : undefined);
+    }
+  }
+});
+
+test('protection batches run serially, preserve each failure and retry only failed items', async () => {
+  const denied = { code: 'permission_denied' };
+  const source = [{ name: '资料', note: '工作' }, { name: '资料', note: '归档' }, { name: '照片', note: '' }];
+  let running = 0; let maximum = 0; const completed = [];
+  const results = await runProtectionBatch(source, async item => {
+    running++; maximum = Math.max(maximum, running);
+    await new Promise(resolve => setTimeout(resolve, 1)); running--;
+    if (item.note === '归档') throw denied;
+  }, result => completed.push(result));
+  assert.equal(maximum, 1, '权限变更必须串行处理');
+  assert.deepEqual(results.map(result => result.succeeded), [true, false, true]);
+  assert.equal(results[1].error, denied);
+  assert.deepEqual(completed, results);
+  const retried = [];
+  const retry = await runProtectionBatch(results.filter(result => !result.succeeded).map(result => result.item), async item => { retried.push(item); });
+  assert.deepEqual(retried, [source[1]], '已成功项目不得因重试重复执行');
+  assert.equal(retry[0].succeeded, true);
+  assert.deepEqual(await runProtectionBatch([], async () => assert.fail('空批次不能执行')), []);
+});
+
+test('protection notes use Unicode scalar limits and reject embedded control characters', () => {
+  assert.equal(validProtectionNote('  工作资料  '), true);
+  assert.equal(validProtectionNote('😀'.repeat(80)), true);
+  assert.equal(validProtectionNote('😀'.repeat(81)), false);
+  assert.equal(validProtectionNote('工作\n资料'), false);
+  assert.equal(validProtectionNote('工作\u0000资料'), false);
+  assert.equal(validProtectionNote(''), true);
+});
+
+test('managed service response rejects business errors, console hosts and malformed snapshots', () => {
+  const transport = { host: 'service', healthy: true, last_tick_error: null };
+  assert.throws(() => managedResponse({ version: 1, transport, data: {}, error: 'authentication' }), error => error.code === 'authentication');
+  assert.throws(() => managedResponse({ version: 1, transport: { ...transport, host: 'console' }, data: {}, error: null }), error => error.code === 'service_unavailable');
+  assert.throws(() => managedResponse({ version: 1, transport, data: null, error: null }), error => error.code === 'internal');
+  assert.throws(() => managedResponse({ version: 9, transport, data: {}, error: null }));
+  const root = { id: 'opaque', name: '资料', note: '工作', mode: 'hidden-locked', password_required: true, monitoring: true, unlocked_until: null, restoring: false, last_error: null, entries: 2, path: 'private-path', sid: 'private-sid', original_acl: 'private-acl' };
+  const snapshot = managedStatus({ registered: 1, roots: [root] });
+  assert.deepEqual(Object.keys(snapshot.roots[0]).sort(), ['id', 'name', 'note', 'mode', 'password_required', 'monitoring', 'unlocked_until', 'restoring', 'last_error', 'entries'].sort());
+  assert.equal(JSON.stringify(snapshot).includes('private-'), false, '未知服务字段不进入UI状态');
+  assert.throws(() => managedStatus({ registered: 2, roots: [root] }));
+  assert.throws(() => managedStatus({ registered: 2, roots: [root, root] }));
+  assert.throws(() => managedStatus({ registered: 1, roots: [{ ...root, unlocked_until: 'tomorrow' }] }));
+});
+
+test('managed requests release password references after transport and business failures', async () => {
+  for (const transportFailure of [false, true]) {
+    const command = { action: 'set_password', id: 'opaque', password: 'current-password-only', new_password: 'new-password-only' };
+    await assert.rejects(requestManaged(command, async received => {
+      assert.equal(received, command); assert.equal(received.password, 'current-password-only');
+      if (transportFailure) throw { code: 'service_unavailable' };
+      return { version: 1, transport: { host: 'service', healthy: true, last_tick_error: null }, data: null, error: 'authentication' };
+    }), error => error.code === (transportFailure ? 'service_unavailable' : 'authentication'));
+    assert.equal(command.password, ''); assert.equal(command.new_password, null);
+    assert.equal(JSON.stringify(command).includes('password-only'), false);
+  }
+});
+
+test('managed access password accepts Unicode characters within UTF-8 byte bounds', () => {
+  assert.equal(validManagedPassword('1234567'), false);
+  assert.equal(validManagedPassword('12345678'), true);
+  assert.equal(validManagedPassword('😀'.repeat(8)), true);
+  assert.equal(validManagedPassword('😀'.repeat(256)), true);
+  assert.equal(validManagedPassword('😀'.repeat(257)), false);
 });

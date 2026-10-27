@@ -1,0 +1,16 @@
+{
+  "actual_read_denied": true,
+  "state_empty": true,
+  "content_and_attributes_restored": true,
+  "isolated_appdata": true,
+  "no_lock_deny_rule_remaining": true,
+  "mode_retained_after_process_restart": true,
+  "app_url": "http://tauri.localhost/",
+  "gui_applied_hidden_locked": true,
+  "tested_at": "2026-10-27T17:54:41.3395677+08:00",
+  "gui_restored_after_restart": true,
+  "passed": true,
+  "inheritance_restored": true,
+  "app_sha256": "513e22720ad03777b5871f3ff2af74b188ec67689fe5babf826303fe7b3732a3",
+  "gui_dropdown_showed_five_modes": true
+}

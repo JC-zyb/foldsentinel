@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use foldsentinel::{ProtectionMode, StateStore, default_state_path, vault};
+use foldsentinel::{ProtectionMode, StateStore, default_state_path, service, vault};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 
@@ -17,10 +17,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Apply a reversible file-attribute policy to a file or directory tree.
+    /// 应用可恢复的隐藏、锁定或只读保护方式。
     Protect {
         path: PathBuf,
-        #[arg(long, value_enum, default_value_t = ModeArg::HiddenReadonly)]
+        #[arg(long, value_enum, default_value_t = ModeArg::HiddenLocked)]
         mode: ModeArg,
     },
     /// Restore attributes saved before protection was applied.
@@ -29,11 +29,68 @@ enum Command {
     Status { path: Option<PathBuf> },
     /// Print the state file location.
     StatePath,
+    /// 通过本机SYSTEM服务管理密码访问与持续防护，不会自动安装服务。
+    Managed {
+        #[command(subcommand)]
+        command: ManagedCommand,
+    },
     /// Encrypt a file/folder or restore an authenticated FSEAL package.
     Vault {
         #[command(subcommand)]
         command: VaultCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ManagedCommand {
+    /// 查询服务运行状态。
+    Status,
+    /// 仅列出当前Windows账户登记的外层名称和状态。
+    List,
+    /// 登记持续防护；--password 从终端安全读取密码，不接受命令行密码。
+    Enroll {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = ModeArg::Locked)]
+        mode: ModeArg,
+        #[arg(long, default_value = "")]
+        note: String,
+        #[arg(long)]
+        password: bool,
+    },
+    /// 验证密码后临时访问，默认300秒。
+    Unlock {
+        id: String,
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(30..=3600))]
+        seconds: u64,
+    },
+    /// 立即重新锁定。
+    Relock { id: String },
+    /// 解除并恢复原始状态；有密码的项目须加--password并验证。
+    Remove {
+        id: String,
+        #[arg(long)]
+        password: bool,
+    },
+    /// 设置或更改密码；--clear 验证当前密码后移除密码。
+    Password {
+        id: String,
+        #[arg(long)]
+        clear: bool,
+    },
+    /// 开关持续扫描；关闭监控不会解除已经应用的权限。
+    Continuous {
+        id: String,
+        #[arg(value_enum)]
+        state: MonitoringArg,
+        #[arg(long)]
+        password: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum MonitoringArg {
+    On,
+    Off,
 }
 
 #[derive(Debug, Subcommand)]
@@ -52,8 +109,12 @@ enum VaultCommand {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ModeArg {
+    None,
     Hidden,
+    Locked,
     Readonly,
+    ReadonlyAcl,
+    HiddenLocked,
     #[value(name = "hidden-readonly")]
     HiddenReadonly,
 }
@@ -61,8 +122,12 @@ enum ModeArg {
 impl From<ModeArg> for ProtectionMode {
     fn from(value: ModeArg) -> Self {
         match value {
+            ModeArg::None => Self::None,
             ModeArg::Hidden => Self::Hidden,
+            ModeArg::Locked => Self::Locked,
             ModeArg::Readonly => Self::Readonly,
+            ModeArg::ReadonlyAcl => Self::ReadonlyAcl,
+            ModeArg::HiddenLocked => Self::HiddenLocked,
             ModeArg::HiddenReadonly => Self::HiddenReadonly,
         }
     }
@@ -75,7 +140,7 @@ fn main() -> Result<()> {
             let mut store = StateStore::load_default()?;
             let report = store.protect(&path, mode.into())?;
             println!(
-                "已应用属性 {}，修改 {} 项，状态文件: {}",
+                "已应用保护 {}，修改 {} 项，状态文件: {}",
                 path.display(),
                 report.changed,
                 store.state_path().display()
@@ -85,7 +150,7 @@ fn main() -> Result<()> {
             let mut store = StateStore::load_default()?;
             let report = store.unprotect(&path)?;
             println!(
-                "已恢复属性 {}，恢复 {} 项，缺失 {} 项，状态文件: {}",
+                "已恢复原始状态 {}，恢复 {} 项，缺失 {} 项，状态文件: {}",
                 path.display(),
                 report.changed,
                 report.missing,
@@ -121,6 +186,7 @@ fn main() -> Result<()> {
             }
         }
         Command::StatePath => println!("{}", default_state_path()?.display()),
+        Command::Managed { command } => run_managed(command)?,
         Command::Vault { command } => match command {
             VaultCommand::Encrypt { input, output } => {
                 let password = read_password(true)?;
@@ -175,6 +241,92 @@ fn main() -> Result<()> {
             }
         },
     }
+    Ok(())
+}
+
+fn run_managed(command: ManagedCommand) -> Result<()> {
+    let mut registration_guard = None;
+    let optional_password = |required| -> Result<Option<String>> {
+        if required {
+            Ok(Some(read_password(false)?.to_string()))
+        } else {
+            Ok(None)
+        }
+    };
+    let request = match command {
+        ManagedCommand::Status => service::Command::Status,
+        ManagedCommand::List => service::Command::List,
+        ManagedCommand::Enroll {
+            path,
+            mode,
+            note,
+            password,
+        } => {
+            let store = StateStore::load_default()?;
+            store.ensure_service_registration_available(&path)?;
+            registration_guard = Some(store);
+            let mode = mode.into();
+            if !matches!(
+                mode,
+                ProtectionMode::Locked | ProtectionMode::HiddenLocked | ProtectionMode::ReadonlyAcl
+            ) {
+                bail!("服务登记仅支持locked、hidden-locked和readonly-acl");
+            }
+            service::Command::Enroll {
+                path: std::fs::canonicalize(path)?,
+                mode,
+                note,
+                password: if password {
+                    Some(read_password(true)?.to_string())
+                } else {
+                    None
+                },
+            }
+        }
+        ManagedCommand::Unlock { id, seconds } => service::Command::Unlock {
+            id,
+            password: read_password(false)?.to_string(),
+            duration_seconds: seconds,
+        },
+        ManagedCommand::Relock { id } => service::Command::Relock { id },
+        ManagedCommand::Remove { id, password } => service::Command::Remove {
+            id,
+            password: optional_password(password)?,
+        },
+        ManagedCommand::Password { id, clear } => {
+            let password =
+                Zeroizing::new(rpassword::prompt_password("当前密码（首次设置留空）：")?);
+            let next = if clear {
+                None
+            } else {
+                Some(read_password(true)?)
+            };
+            service::Command::SetPassword {
+                id,
+                password: password.to_string(),
+                new_password: next.as_ref().map(|value| value.to_string()),
+            }
+        }
+        ManagedCommand::Continuous {
+            id,
+            state,
+            password,
+        } => service::Command::SetContinuous {
+            id,
+            password: optional_password(password)?,
+            enabled: matches!(state, MonitoringArg::On),
+        },
+    };
+    // 持有本地状态锁至请求返回，串行化本账户的两种登记入口。
+    let _registration_guard = registration_guard;
+    let response = service::request(&service::Request::new(request))?;
+    if !response.transport.healthy {
+        eprintln!("保护服务存在待处理失败，请检查逐项状态");
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&response.into_result()?)?
+    );
     Ok(())
 }
 
