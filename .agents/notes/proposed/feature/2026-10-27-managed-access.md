@@ -46,6 +46,8 @@ StateStore的新增、模式切换、备注、解除与恢复备份导入都在�
 
 首次失败的夹具通过Windows继承正规化暴露了直接恢复子ACL的顺序要求，以及日志不可写时父项重锁影响未登记新子项的边界；前者以真实外部ACE变更测试，后者通过保留原ACE继承规则修复并加入回归用例，没有吞掉检查失败。
 
+首次干净Windows CI运行40500699933暴露未安装服务时的宿主拒绝分类：SCM的ERROR_SERVICE_DOES_NOT_EXIST被通用IO分类为ReadFailed，伪服务测试要求PermissionDenied。生产身份核对现加显式PermissionDenied上下文并保留底层错误链；仍在发送请求前拒绝，未放宽伪服务测试或改成接受任意错误。本机已安装服务时同一测试走PID不匹配分支，因此必须保留干净runner证据。
+
 ## Alternatives considered
 
 - 直接复用 Readonly 属性实现成本最低，但它对文件夹不提供写保护，因此保留为旧模式，新增权限策略。

@@ -548,7 +548,7 @@ fn verify_server(pipe: HANDLE, expected: &str) -> Result<()> {
         checked(GetNamedPipeServerProcessId(pipe, &mut pid))?;
     }
     if expected == SYSTEM_SID {
-        return verify_service_process(pid);
+        return verify_service_process(pid).context(ErrorCode::PermissionDenied);
     }
     let process = unsafe { Handle::new(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid))? };
     let mut token = null_mut();
@@ -1396,7 +1396,7 @@ mod tests {
                 }
                 return Err(error);
             }
-            // 伪服务未获得任何密码或请求字节，客户端即拒绝宿主SID。
+            // 伪服务未获得任何密码或请求字节，客户端即拒绝未经SCM验证的宿主。
             let error = read_frame(pipe.raw(), IO_TIMEOUT, &stop)
                 .err()
                 .context("客户端不应发送请求")?;
