@@ -14,11 +14,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -37,7 +37,7 @@ jobs:
       - run: ./scripts/package.ps1
       - name: Installer upgrade and uninstall smoke
         run: ./scripts/validate-install.ps1 -Report ./v06-install-windows-x64.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: FoldSentinel-validation
@@ -46,7 +46,7 @@ jobs:
             v06-install-windows-x64.json
             v06-attributes-windows-x64.json
           if-no-files-found: warn
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: FoldSentinel-windows-x64
           path: artifacts/*
