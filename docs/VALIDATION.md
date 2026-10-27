@@ -14,7 +14,9 @@ GUI、CLI、服务程序与NSIS已构建，便携包包含独立服务程序、�
 
 首次真实SYSTEM测试暴露普通账户读取SYSTEM进程令牌被拒绝（os5），已改为发送密码前核对内核返回管道PID与SCM固定服务的OwnProcess/LocalSystem/Running/PID，不给普通用户调试权限。临时保留的更新前服务二进制已清理。共同StateStore锁只覆盖同一账户官方默认GUI/CLI，不是所有账户本地记录或自制RPC的全局原子互斥。
 
-第二账户、整机重启和服务卸载尚未验证。原生100%/125%/150% DPI、当前改动跨窗口拖放、GUI安装升级卸载和对应提交远程CI也仍待验证。浏览器DPR、旧版本结果均不替代这些证据。操作方式及恢复条件见[持续防护服务](SERVICE.md)。
+提交 `261fdfb63cdeec2fa7acdf67440fe3a78d43e2ca` 的 [Windows CI 40510468406](https://github.com/JC-zyb/foldsentinel/actions/runs/40510468406) 全部通过：Rust/前端测试、Clippy、真实属性与隔离卷 IO、打包，以及 `scripts/validate-install.ps1` 的11项 NSIS 安装升级/卸载检查。校验报告与安装产物已下载并通过 SHA-256 验证。Workflow 使用 Node 24 的 checkout/setup-node/upload-artifact action；本次日志没有 Node 20 强制兼容或 `punycode` 弃用警告。NSIS 安装器卸载 smoke 不覆盖独立 SYSTEM 服务卸载。
+
+仍待真实环境验证：第二 Windows 账户、整机重启、SYSTEM 服务卸载、原生100%/125%/150% DPI、当前改动跨窗口拖放，以及 GUI 完整密码登记/临时访问/重锁流程。浏览器DPR、SCM停止启动或强制结束进程、NSIS 卸载结果均不替代这些证据。操作方式及恢复条件见[持续防护服务](SERVICE.md)。
 
 ## 批量保护、权限只读与恢复备份 — 2026-10-27（本地源码，尚未发布）
 
