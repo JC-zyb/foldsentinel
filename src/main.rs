@@ -75,7 +75,7 @@ fn main() -> Result<()> {
             let mut store = StateStore::load_default()?;
             let report = store.protect(&path, mode.into())?;
             println!(
-                "已保护 {}，修改 {} 项，状态文件: {}",
+                "已应用属性 {}，修改 {} 项，状态文件: {}",
                 path.display(),
                 report.changed,
                 store.state_path().display()
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
             let mut store = StateStore::load_default()?;
             let report = store.unprotect(&path)?;
             println!(
-                "已解除保护 {}，恢复 {} 项，缺失 {} 项，状态文件: {}",
+                "已恢复属性 {}，恢复 {} 项，缺失 {} 项，状态文件: {}",
                 path.display(),
                 report.changed,
                 report.missing,
@@ -94,11 +94,30 @@ fn main() -> Result<()> {
         }
         Command::Status { path } => {
             let store = StateStore::load_default()?;
-            let entries = store.matching_entries(path.as_deref())?;
+            let entries = store.statuses(path.as_deref(), 0, usize::MAX)?;
             println!("状态文件: {}", store.state_path().display());
-            println!("受保护项目: {}", entries.len());
-            for entry in entries {
-                println!("- {} [{:?}]", entry.path, entry.mode);
+            if path.is_none() {
+                let roots = store.roots();
+                println!("已保存的最外层路径: {}", roots.len());
+                for root in roots {
+                    println!("  {}（{} 条恢复记录）", root.path, root.entry_count);
+                }
+            }
+            println!("管理记录: {}", entries.len());
+            for status in entries {
+                println!(
+                    "- {} [{:?}] {:?} current={:?} expected=0x{:X} original=0x{:X} managed=0x{:X} os={:?}",
+                    status.entry.path,
+                    status.entry.mode,
+                    status.state,
+                    status
+                        .current_attributes
+                        .map(|value| format!("0x{value:X}")),
+                    status.expected_attributes,
+                    status.entry.original_attributes,
+                    status.entry.managed_attributes,
+                    status.os_code
+                );
             }
         }
         Command::StatePath => println!("{}", default_state_path()?.display()),

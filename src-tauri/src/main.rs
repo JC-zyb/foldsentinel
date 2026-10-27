@@ -1,16 +1,24 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use foldsentinel::{ManagedEntry, OperationReport, ProtectionMode, StateStore, vault};
+use foldsentinel::{
+    ManagedRoot, ManagedStatus, OperationReport, ProtectionMode, StateStore, vault,
+};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
 mod support;
+const ATTRIBUTE_PAGE_SIZE: usize = 50;
 
 #[derive(Serialize)]
 struct Snapshot {
-    entries: Vec<ManagedEntry>,
+    roots: Vec<ManagedRoot>,
+    root_total: usize,
+    root_offset: usize,
+    entries: Vec<ManagedStatus>,
+    total: usize,
+    offset: usize,
     state_path: String,
 }
 
@@ -207,11 +215,29 @@ async fn attribute_operation(
 }
 
 #[tauri::command]
-async fn protection_status() -> Result<Snapshot, UiError> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn protection_status(offset: usize, root_offset: usize) -> Result<Snapshot, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
         let store = StateStore::load_default().map_err(UiError::vault)?;
+        let total = store.entries().count();
+        let roots = store.roots();
+        let root_total = roots.len();
+        let root_offset = root_offset
+            .min(root_total.saturating_sub(1) / ATTRIBUTE_PAGE_SIZE * ATTRIBUTE_PAGE_SIZE);
+        let offset =
+            offset.min(total.saturating_sub(1) / ATTRIBUTE_PAGE_SIZE * ATTRIBUTE_PAGE_SIZE);
         Ok(Snapshot {
-            entries: store.entries().cloned().collect(),
+            roots: roots
+                .into_iter()
+                .skip(root_offset)
+                .take(ATTRIBUTE_PAGE_SIZE)
+                .collect(),
+            root_total,
+            root_offset,
+            entries: store
+                .statuses(None, offset, ATTRIBUTE_PAGE_SIZE)
+                .map_err(UiError::vault)?,
+            total,
+            offset,
             state_path: store.state_path().display().to_string(),
         })
     })

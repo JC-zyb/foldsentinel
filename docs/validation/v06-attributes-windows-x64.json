@@ -1,0 +1,23 @@
+{
+  "checks": [
+    "recursive_hidden_system_flags",
+    "readonly_status_refresh",
+    "saved_root_reload_and_restore",
+    "external_change_detection",
+    "original_attribute_restore",
+    "readonly_write_denied",
+    "source_content_kept"
+  ],
+  "limitations": [
+    "Explorer visibility is validated separately in the real UI.",
+    "No ACL, administrator, clean-VM or missing-WebView2 test is performed."
+  ],
+  "observed_file_attributes": {
+    "hidden": 38,
+    "original": 32,
+    "restored": 32
+  },
+  "passed": true,
+  "platform": "windows",
+  "version": "0.6.0"
+}

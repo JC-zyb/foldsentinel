@@ -2,7 +2,7 @@
 
 ## Windows 安装与便携版
 
-Windows 10/11 x64 需要 WebView2 Runtime。v0.5 的安装包名为 `FoldSentinel_0.5.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。v0.5 当前为本地开发版本，是否已发布及可下载附件以实际 Release 为准。
+Windows 10/11 x64 需要 WebView2 Runtime。v0.6 的安装包名为 `FoldSentinel_0.6.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。v0.6 当前为本地开发版本，是否已发布及可下载附件以实际 Release 为准。
 
 升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
 
@@ -11,6 +11,12 @@ Windows 10/11 x64 需要 WebView2 Runtime。v0.5 的安装包名为 `FoldSentine
 v0.5 保持上述标识、路径、键及记录结构。预览不写入历史、用户目录或导出诊断；重启、关闭预览、切换操作或运行新任务后须重新验证。单文件包格式没有原文件名，不会从包名称猜测原名。超过展示上限时仍完整验证整包，清单仅展示前 1,000 项和 256 KiB 名称。
 
 隐藏策略会写入 Windows Hidden + System 属性。资源管理器默认隐藏受保护的操作系统文件，因此开启“显示隐藏的项目”时通常仍不会列出这些项目；关闭该保护选项或使用其他文件管理器后仍可见。需要内容机密性时请使用加密包，属性操作不提供安全边界。
+
+v0.6 保持语言、任务历史和加密包兼容，属性恢复记录接受 v1/v2。仅刷新不改状态 JSON；下一次应用 / 恢复属性后保存 version 2，逐条记录托管位，v0.5 及更早程序会拒绝读取。降级前先用新版恢复管理项目并备份 JSON；不要直接换回旧程序或用旧 JSON 覆盖新记录。没有掩码的旧记录按 Hidden/Readonly 处理，System 不自动清除；曾使用本地 System 隐藏补丁的记录也如此，因为无法可靠区分其来源。
+
+同一 JSON 保存 `roots` 最外层路径索引，与原始属性在文件变更前一同写入。重启自动加载并在首页提供“查看并恢复”，属性页顶部可选择或恢复各最外层路径。旧记录没有索引时从已保存条目推导，父子路径合并，同名前缀的其他路径独立；恢复后同步更新索引。备份须保留完整 `state.json`，只保存路径名称不足以还原原始属性。
+
+状态检查每页 50 条，显示实际完整位及预期托管位；Archive 等非托管位变化不表示保护失效。路径不一致可能来自外部修改或应用中断，缺失 / 无法读取保持记录不变。状态不是实时监控；刷新不覆盖属性，新建子项不会自动进入管理。Readonly 对目录不提供写保护。
 
 异常退出可能留下已认证的恢复明文。启动提示引导查看中断记录：正在运行的任务不能清理；可清理记录展示源、输出和临时位置；损坏或位置异常的记录保留并提示人工核查，不影响其他记录列出。只通过中断任务清理入口或 CLI `vault cleanup <ID>` 清理所属临时数据；程序检查锁与所有者，不会删除最终输出。清理失败会保留记录，解除占用或恢复目标父目录后重试。不要手动删除仍在运行的任务目录。没有断点续传，也不承诺断电事务或安全擦除。
 
@@ -21,8 +27,8 @@ v0.5 保持上述标识、路径、键及记录结构。预览不写入历史、
 同一 Release 下载安装包或便携 ZIP 和 `SHA256SUMS.txt`，在 PowerShell 中执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.5.0_x64-setup.exe
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.5.0_windows-x64_portable.zip
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.6.0_x64-setup.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.6.0_windows-x64_portable.zip
 ```
 
 逐项比对名称与哈希，须与发布页及校验文件一致。SHA-256 用于检测下载内容变化，不等价于代码签名或独立安全审计。当前产物未签名。

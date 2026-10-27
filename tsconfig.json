@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022", "module": "ESNext", "lib": ["ES2022", "ESNext.Disposable", "DOM"],
-    "moduleResolution": "bundler", "strict": true, "noEmit": true,
+    "moduleResolution": "bundler", "strict": true, "noEmit": true, "allowImportingTsExtensions": true,
     "noUnusedLocals": true, "noUnusedParameters": true
   },
   "include": ["ui"]

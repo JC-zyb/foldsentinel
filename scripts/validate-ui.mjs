@@ -61,6 +61,43 @@ try {
           checks.push({ css_width: width, device_scale_factor: scale, operation, language, no_horizontal_overflow: true, sources_and_password_preserved: true, screenshot });
         }
       }
+      await page.locator('#nav-attributes').click();
+      for (const language of ['zh-CN', 'en']) {
+        await page.locator('#language').selectOption(language);
+        // 合成数据只用于真实组件的排版检查，不接入 IPC 或模拟成功属性操作。
+        await page.evaluate(async () => {
+          const { createAttributeRecord, createRootRecord } = await import('/ui/attributes.ts');
+          const roots = document.querySelector('#root-list');
+          roots.replaceChildren(createRootRecord({ path: `D:\\test\\${'中文最外层路径'.repeat(18)}`, entry_count: 54 }, () => {}, () => {}), createRootRecord({ path: 'D:\\<img src=x onerror=alert(1)>.txt', entry_count: 1 }, () => {}, () => {}));
+          const statuses = ['consistent', 'changed', 'missing', 'unreadable'];
+          const list = document.querySelector('#record-list');
+          list.replaceChildren(...statuses.map((state, index) => createAttributeRecord({
+            entry: { path: `D:\\test\\${'中文长路径'.repeat(18)}\\${index}.txt`, mode: 'hidden', original_attributes: 32, managed_attributes: index === 0 ? 3 : 7 },
+            current_attributes: index > 1 ? null : index === 0 ? 34 : 32,
+            expected_attributes: index === 0 ? 2 : 6, state, ...(index === 2 ? { os_code: 2 } : {})
+          }, () => {})));
+          list.append(createAttributeRecord({
+            entry: { path: 'D:\\<img src=x onerror=alert(1)>.txt', mode: 'readonly', original_attributes: 32, managed_attributes: 3 },
+            current_attributes: 33, expected_attributes: 1, state: 'consistent'
+          }, () => {}));
+        });
+        assert.equal(await page.locator('#record-list .record').count(), 5);
+        assert.equal(await page.locator('#record-list img').count(), 0, '路径必须按文本显示');
+        assert.equal(await page.locator('#root-list .root-record').count(), 2);
+        assert.equal(await page.locator('#root-list img').count(), 0, '已保存路径必须按文本显示');
+        const layout = await page.evaluate(() => ({
+          width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+          outside: [...document.querySelectorAll('#attributes-panel button, #attributes-panel input, #attributes-panel select')].filter(element => {
+            const box = element.getBoundingClientRect();
+            return box.width > 0 && box.height > 0 && (box.left < -1 || box.right > innerWidth + 1 || element.scrollWidth > element.clientWidth + 2);
+          }).map(element => element.id || element.className)
+        }));
+        assert.ok(layout.documentWidth <= layout.width + 1, JSON.stringify({ width, scale, language, layout }));
+        assert.deepEqual(layout.outside, [], JSON.stringify({ width, scale, language, layout }));
+        const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
+        await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_status_layout: true, paths_rendered_as_text: true, screenshot });
+      }
       await page.locator('#language').focus();
       await page.keyboard.press('Tab');
       assert.equal(await page.evaluate(() => {
