@@ -66,25 +66,19 @@ try {
         await page.locator('#language').selectOption(language);
         // 合成数据只用于真实组件的排版检查，不接入 IPC 或模拟成功属性操作。
         await page.evaluate(async () => {
-          const { createAttributeRecord, createRootRecord } = await import('/ui/attributes.ts');
+          const { createRootRecord } = await import('/ui/attributes.ts');
           const roots = document.querySelector('#root-list');
-          roots.replaceChildren(createRootRecord({ path: `D:\\test\\${'中文最外层路径'.repeat(18)}`, entry_count: 54 }, () => {}, () => {}), createRootRecord({ path: 'D:\\<img src=x onerror=alert(1)>.txt', entry_count: 1 }, () => {}, () => {}));
-          const statuses = ['consistent', 'changed', 'missing', 'unreadable'];
-          const list = document.querySelector('#record-list');
-          list.replaceChildren(...statuses.map((state, index) => createAttributeRecord({
-            entry: { path: `D:\\test\\${'中文长路径'.repeat(18)}\\${index}.txt`, mode: 'hidden', original_attributes: 32, managed_attributes: index === 0 ? 3 : 7 },
-            current_attributes: index > 1 ? null : index === 0 ? 34 : 32,
-            expected_attributes: index === 0 ? 2 : 6, state, ...(index === 2 ? { os_code: 2 } : {})
-          }, () => {})));
-          list.append(createAttributeRecord({
-            entry: { path: 'D:\\<img src=x onerror=alert(1)>.txt', mode: 'readonly', original_attributes: 32, managed_attributes: 3 },
-            current_attributes: 33, expected_attributes: 1, state: 'consistent'
-          }, () => {}));
+          // 故意附加旧字段，确保真实渲染组件也不把它们写进文本、title、aria 或表单。
+          const record = { id: 'private-internal-id', name: '中文最外层名称'.repeat(18), path: 'D:\\private-parent\\private-child.txt', entry_count: 54 };
+          roots.replaceChildren(createRootRecord(record, () => {}), createRootRecord({ id: 'second-id', name: '<img src=x onerror=alert(1)>.txt' }, () => {}));
         });
-        assert.equal(await page.locator('#record-list .record').count(), 5);
-        assert.equal(await page.locator('#record-list img').count(), 0, '路径必须按文本显示');
+        assert.equal(await page.locator('#record-list, #state-location').count(), 0, '内部明细和状态文件位置不进入页面');
         assert.equal(await page.locator('#root-list .root-record').count(), 2);
-        assert.equal(await page.locator('#root-list img').count(), 0, '已保存路径必须按文本显示');
+        assert.equal(await page.locator('#root-list img').count(), 0, '最外层名称必须按文本显示');
+        const markup = await page.locator('#attributes-panel').evaluate(element => element.outerHTML);
+        for (const secret of ['private-parent', 'private-child', 'private-internal-id', 'state.json']) assert.ok(!markup.includes(secret), `属性页面不得包含 ${secret}`);
+        assert.equal(await page.locator('#attribute-path').inputValue(), '');
+        assert.ok(!(await page.locator('#root-list').ariaSnapshot()).includes('private-'), '可访问性标签不得暴露隐藏明细');
         const layout = await page.evaluate(() => ({
           width: innerWidth, documentWidth: document.documentElement.scrollWidth,
           outside: [...document.querySelectorAll('#attributes-panel button, #attributes-panel input, #attributes-panel select')].filter(element => {
@@ -96,7 +90,7 @@ try {
         assert.deepEqual(layout.outside, [], JSON.stringify({ width, scale, language, layout }));
         const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
-        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_status_layout: true, paths_rendered_as_text: true, screenshot });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, screenshot });
       }
       await page.locator('#language').focus();
       await page.keyboard.press('Tab');

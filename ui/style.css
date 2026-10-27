@@ -117,21 +117,10 @@ select { max-width: 280px; }
 .recovery-item p { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .recovery-alert { margin: 0 0 18px; }
 .recovery-alert button { margin-top: 10px; }
-#record-list { padding: 4px; margin-top: 12px; max-height: 280px; overflow: auto; }
 .saved-roots { margin: 24px 0; }
 #root-list { padding: 0; max-height: 280px; overflow: auto; }
 .root-record { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px; background: #fff; border-bottom: 1px solid var(--border); }
-.root-path { flex: 1 1 240px; min-width: 0; min-height: 44px; padding: 8px; text-align: left; color: var(--blue); background: transparent; overflow-wrap: anywhere; }
-.root-record .field-help { margin: 0; }
-.record { width: 100%; display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: center; padding: 12px; background: #fff; border-bottom: 1px solid var(--border); text-align: left; color: #29495e; }
-.record > span { min-width: 0; }
-.record > span:first-child { flex: 1 1 220px; }
-.record:hover { background: #eaf3f8; }
-.record span { overflow-wrap: anywhere; font-size: 13px; }
-.record small { font-size: 12px; color: var(--muted); }
-.attribute-details { display: grid; gap: 4px; flex: 1 1 250px; }
-.attribute-state.consistent { color: var(--success); }
-.attribute-state.changed, .attribute-state.missing, .attribute-state.unreadable { color: var(--danger); }
+.root-name { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
 .empty-records { font-size: 13px; color: var(--muted); border: 1px dashed #becfdb; border-radius: 7px; padding: 20px; text-align: center; }
 .result { margin-top: 18px; padding: 15px 18px; border: 1px solid; border-radius: 8px; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
 .success { color: #185a43; border-color: #b5d9c9; background: #eff9f3; }

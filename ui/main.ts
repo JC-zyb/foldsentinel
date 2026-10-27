@@ -5,7 +5,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { detectLanguage, errorText, failureCode, language, setLanguage, t, type Language, type MessageKey } from './i18n';
 import { batchSummary, HISTORY_KEY, MAX_SOURCES, inspectSources, loadHistory, mergeSourcePaths, serializeHistory, sourceKey, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
 import { previewPage, type PackagePreview } from './preview';
-import { ATTRIBUTE_PAGE_SIZE, createAttributeRecord, createRootRecord, type ManagedRoot, type ManagedStatus } from './attributes';
+import { ATTRIBUTE_PAGE_SIZE, createRootRecord, type ManagedRoot } from './attributes';
 import './style.css';
 
 const LANGUAGE_KEY = 'foldsentinel.language';
@@ -45,10 +45,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </section>
     <section id="attributes-panel" hidden>
       <div class="notice attribute-notice" ${text('attributeNotice')}></div>
-      <section class="records saved-roots" aria-labelledby="roots-title"><div class="records-heading"><h2 id="roots-title" ${text('managedRoots')}></h2></div><p class="field-help" ${text('managedRootsHelp')}></p><p id="root-summary" role="status" class="field-help"></p><ul id="root-list"></ul><div class="selection-actions"><button id="roots-previous" class="secondary" type="button" ${text('previousPage')}></button><button id="roots-next" class="secondary" type="button" ${text('nextPage')}></button></div></section>
+      <section class="records saved-roots" aria-labelledby="roots-title"><div class="records-heading"><h2 id="roots-title" ${text('managedRoots')}></h2><button id="refresh-records" class="text-button" ${text('refresh')}></button></div><p class="field-help" ${text('managedRootsHelp')}></p><p id="root-summary" role="status" class="field-help"></p><ul id="root-list"></ul><div class="selection-actions"><button id="roots-previous" class="secondary" type="button" ${text('previousPage')}></button><button id="roots-next" class="secondary" type="button" ${text('nextPage')}></button></div></section>
       <form id="attribute-form" class="panel"><fieldset id="attribute-fields"><legend class="sr-only" ${text('attributes')}></legend><h2 ${text('manageAttributes')}></h2><label for="attribute-path" ${text('attributePath')}></label><div class="path-row"><input id="attribute-path" required spellcheck="false" autocomplete="off"><button id="pick-attribute-file" class="secondary" type="button" ${text('pickFile')}></button><button id="pick-attribute-folder" class="secondary" type="button" ${text('pickFolder')}></button></div>
-        <label for="attribute-mode" ${text('policy')}></label><select id="attribute-mode"><option value="hidden-readonly" ${text('hiddenReadonly')}></option><option value="hidden" ${text('hidden')}></option><option value="readonly" ${text('readonly')}></option></select><p class="field-help" ${text('attributeHelp')}></p><div class="attribute-actions"><button class="secondary" id="restore-attributes" type="button" ${text('restoreAttributes')}></button><button class="primary" type="submit" ${text('applyAttributes')}></button></div>
-      </fieldset></form><div class="records"><div class="records-heading"><h2 ${text('records')}></h2><button id="refresh-records" class="text-button" ${text('refresh')}></button></div><p class="field-help" ${text('recordHelp')}></p><p id="record-summary" role="status" class="field-help"></p><ul id="record-list"></ul><div class="selection-actions"><button id="records-previous" class="secondary" type="button" ${text('previousPage')}></button><button id="records-next" class="secondary" type="button" ${text('nextPage')}></button></div><p id="state-location" class="field-help"></p></div>
+        <label for="attribute-mode" ${text('policy')}></label><select id="attribute-mode"><option value="hidden-readonly" ${text('hiddenReadonly')}></option><option value="hidden" ${text('hidden')}></option><option value="readonly" ${text('readonly')}></option></select><p class="field-help" ${text('attributeHelp')}></p><div class="attribute-actions"><button class="primary" type="submit" ${text('applyAttributes')}></button></div>
+      </fieldset></form>
     </section>
     <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div><section id="diagnostic" class="diagnostic" hidden><details><summary ${text('errorDetails')}></summary><p class="field-help" ${text('diagnosticPrivacy')}></p><pre id="diagnostic-text"></pre><div class="selection-actions"><button id="copy-diagnostic" type="button" class="secondary" ${text('copyDetails')}></button><button id="export-diagnostic" type="button" class="secondary" ${text('exportDetails')}></button></div><p id="diagnostic-status" role="status"></p></details></section><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
   </main>`;
@@ -138,10 +138,8 @@ function syncControls(): void {
   element<HTMLFieldSetElement>('vault-fields').disabled = uiBusy;
   element<HTMLFieldSetElement>('attribute-fields').disabled = uiBusy || queue.running;
   for (const id of ['refresh-jobs', 'refresh-records']) element<HTMLButtonElement>(id).disabled = uiBusy || queue.running;
-  element<HTMLButtonElement>('records-previous').disabled = uiBusy || queue.running || !snapshot || snapshot.offset === 0;
-  element<HTMLButtonElement>('records-next').disabled = uiBusy || queue.running || !snapshot || snapshot.offset + snapshot.entries.length >= snapshot.total;
-  element<HTMLButtonElement>('roots-previous').disabled = uiBusy || queue.running || !snapshot || snapshot.root_offset === 0;
-  element<HTMLButtonElement>('roots-next').disabled = uiBusy || queue.running || !snapshot || snapshot.root_offset + snapshot.roots.length >= snapshot.root_total;
+  element<HTMLButtonElement>('roots-previous').disabled = uiBusy || queue.running || !snapshot || snapshot.offset === 0;
+  element<HTMLButtonElement>('roots-next').disabled = uiBusy || queue.running || !snapshot || snapshot.offset + snapshot.roots.length >= snapshot.total;
   document.querySelectorAll<HTMLButtonElement>('#root-list button').forEach(button => { button.disabled = uiBusy || queue.running; });
   document.querySelectorAll<HTMLButtonElement>('#job-list button').forEach(button => { button.disabled = uiBusy || queue.running; });
   element<HTMLButtonElement>('start-queue').disabled = uiBusy || queue.running || !queue.tasks.some(t => t.status === 'waiting');
@@ -407,51 +405,41 @@ function renderJobs(): void {
 element('refresh-jobs').onclick = () => { void runUi(refreshJobs); };
 element('review-recovery').onclick = () => { element('job-list').scrollIntoView({ block: 'center' }); element('refresh-jobs').focus(); };
 
-interface Snapshot { roots: ManagedRoot[]; root_total: number; root_offset: number; entries: ManagedStatus[]; state_path: string; total: number; offset: number }
-async function refreshRecords(offset = snapshot?.offset ?? 0, rootOffset = snapshot?.root_offset ?? 0): Promise<void> {
+interface Snapshot { roots: ManagedRoot[]; total: number; offset: number }
+async function refreshRecords(offset = snapshot?.offset ?? 0): Promise<void> {
   snapshot = null; renderRecords();
-  snapshot = await invoke<Snapshot>('protection_status', { offset, rootOffset }); renderRecords();
+  snapshot = await invoke<Snapshot>('protection_status', { offset }); renderRecords();
 }
-function selectRoot(path: string): void { input('attribute-path').value = path; input('attribute-path').focus(); }
 function renderRecords(): void {
-  const list = element('record-list'); list.replaceChildren();
   const roots = element('root-list'); roots.replaceChildren(); element('root-summary').textContent = '';
-  element('attribute-alert').hidden = !snapshot?.root_total;
-  element('record-summary').textContent = ''; element('state-location').textContent = '';
+  element('attribute-alert').hidden = !snapshot?.total;
   if (!snapshot) return;
-  element('attribute-alert-text').textContent = t('managedRootAttention', { n: snapshot.root_total });
-  element('root-summary').textContent = t('rootSummary', { total: snapshot.root_total, from: snapshot.root_total ? snapshot.root_offset + 1 : 0, to: snapshot.root_offset + snapshot.roots.length });
+  element('attribute-alert-text').textContent = t('managedRootAttention', { n: snapshot.total });
+  element('root-summary').textContent = t('rootSummary', { total: snapshot.total, from: snapshot.total ? snapshot.offset + 1 : 0, to: snapshot.offset + snapshot.roots.length });
   if (!snapshot.roots.length) { const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t('emptyRoots'); roots.append(empty); }
-  for (const root of snapshot.roots) roots.append(createRootRecord(root, () => selectRoot(root.path), () => { selectRoot(root.path); void attributes(true, root.path); }));
-  element('record-summary').textContent = t('recordSummary', { total: snapshot.total, from: snapshot.total ? snapshot.offset + 1 : 0, to: snapshot.offset + snapshot.entries.length });
-  if (!snapshot.entries.length) { const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t('emptyRecords'); list.append(empty); }
-  for (const status of snapshot.entries) {
-    const entry = status.entry;
-    list.append(createAttributeRecord(status, () => { input('attribute-path').value = entry.path; input('attribute-path').focus(); }));
-  }
-  element('state-location').textContent = t('stateLocation', { path: snapshot.state_path });
+  for (const root of snapshot.roots) roots.append(createRootRecord(root, () => { void attributes(root.id); }));
+  element('roots-previous').parentElement!.hidden = snapshot.total <= ATTRIBUTE_PAGE_SIZE;
 }
 for (const folder of [false, true]) element(folder ? 'pick-attribute-folder' : 'pick-attribute-file').onclick = () => { void runUi(async () => {
   try { const path = await open({ directory: folder, multiple: false, title: t(folder ? 'pickFolder' : 'pickFile') }); if (typeof path === 'string') input('attribute-path').value = path; }
   catch (error) { console.error(error); showResult('dialogFailed', {}, true); }
 }); };
-async function attributes(restore: boolean, savedPath?: string): Promise<void> {
-  if (queue.running || (!savedPath && !input('attribute-path').reportValidity())) return;
-  const path = savedPath ?? input('attribute-path').value.trim();
+async function attributes(id?: string): Promise<void> {
+  if (queue.running || (!id && !input('attribute-path').reportValidity())) return;
+  const path = input('attribute-path').value.trim();
   await runUi(async () => {
     try {
-      const report = await invoke<{ changed: number; missing: number }>('attribute_operation', { path, mode: element<HTMLSelectElement>('attribute-mode').value, restore });
-      showResult('attributeDone', { changed: report.changed, missing: report.missing });
+      if (id) await invoke('restore_attributes', { id });
+      else await invoke('attribute_operation', { path, mode: element<HTMLSelectElement>('attribute-mode').value, restore: false });
+      input('attribute-path').value = '';
+      showResult(id ? 'attributeRestored' : 'attributeApplied');
     } finally { await refreshRecords(0); }
   });
 }
-element<HTMLFormElement>('attribute-form').onsubmit = event => { event.preventDefault(); void attributes(false); };
-element('restore-attributes').onclick = () => { void attributes(true); };
+element<HTMLFormElement>('attribute-form').onsubmit = event => { event.preventDefault(); void attributes(); };
 element('refresh-records').onclick = () => { void runUi(refreshRecords); };
-element('records-previous').onclick = () => { void runUi(() => refreshRecords(Math.max(0, (snapshot?.offset ?? 0) - ATTRIBUTE_PAGE_SIZE))); };
-element('records-next').onclick = () => { void runUi(() => refreshRecords((snapshot?.offset ?? 0) + ATTRIBUTE_PAGE_SIZE)); };
-element('roots-previous').onclick = () => { void runUi(() => refreshRecords(snapshot?.offset ?? 0, Math.max(0, (snapshot?.root_offset ?? 0) - ATTRIBUTE_PAGE_SIZE))); };
-element('roots-next').onclick = () => { void runUi(() => refreshRecords(snapshot?.offset ?? 0, (snapshot?.root_offset ?? 0) + ATTRIBUTE_PAGE_SIZE)); };
+element('roots-previous').onclick = () => { void runUi(() => refreshRecords(Math.max(0, (snapshot?.offset ?? 0) - ATTRIBUTE_PAGE_SIZE))); };
+element('roots-next').onclick = () => { void runUi(() => refreshRecords((snapshot?.offset ?? 0) + ATTRIBUTE_PAGE_SIZE)); };
 function showPage(): void {
   for (const value of ['vault', 'attributes'] as const) {
     element(`${value}-panel`).hidden = value !== page; element(`nav-${value}`).classList.toggle('selected', value === page);
@@ -459,7 +447,7 @@ function showPage(): void {
   }
   element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
 }
-for (const value of ['vault', 'attributes'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); showPage(); if (value === 'attributes') void runUi(refreshRecords); };
+for (const value of ['vault', 'attributes'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); input('attribute-path').value = ''; showPage(); if (value === 'attributes') void runUi(refreshRecords); };
 element('review-attributes').onclick = () => { page = 'attributes'; clearPasswords(); showPage(); element('roots-title').scrollIntoView({ block: 'start' }); void runUi(refreshRecords); };
 
 translate();

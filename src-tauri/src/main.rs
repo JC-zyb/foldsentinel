@@ -1,26 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use foldsentinel::{
-    ManagedRoot, ManagedStatus, OperationReport, ProtectionMode, StateStore, vault,
-};
+use foldsentinel::{OperationReport, ProtectionMode, StateStore, vault};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
+mod attributes;
 mod support;
-const ATTRIBUTE_PAGE_SIZE: usize = 50;
-
-#[derive(Serialize)]
-struct Snapshot {
-    roots: Vec<ManagedRoot>,
-    root_total: usize,
-    root_offset: usize,
-    entries: Vec<ManagedStatus>,
-    total: usize,
-    offset: usize,
-    state_path: String,
-}
 
 #[derive(Default)]
 struct ActiveJob(Mutex<Option<vault::Control>>);
@@ -215,31 +202,20 @@ async fn attribute_operation(
 }
 
 #[tauri::command]
-async fn protection_status(offset: usize, root_offset: usize) -> Result<Snapshot, UiError> {
+async fn protection_status(offset: usize) -> Result<attributes::Snapshot, UiError> {
     tauri::async_runtime::spawn_blocking(move || {
         let store = StateStore::load_default().map_err(UiError::vault)?;
-        let total = store.entries().count();
-        let roots = store.roots();
-        let root_total = roots.len();
-        let root_offset = root_offset
-            .min(root_total.saturating_sub(1) / ATTRIBUTE_PAGE_SIZE * ATTRIBUTE_PAGE_SIZE);
-        let offset =
-            offset.min(total.saturating_sub(1) / ATTRIBUTE_PAGE_SIZE * ATTRIBUTE_PAGE_SIZE);
-        Ok(Snapshot {
-            roots: roots
-                .into_iter()
-                .skip(root_offset)
-                .take(ATTRIBUTE_PAGE_SIZE)
-                .collect(),
-            root_total,
-            root_offset,
-            entries: store
-                .statuses(None, offset, ATTRIBUTE_PAGE_SIZE)
-                .map_err(UiError::vault)?,
-            total,
-            offset,
-            state_path: store.state_path().display().to_string(),
-        })
+        Ok(attributes::snapshot(&store, offset))
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn restore_attributes(id: String) -> Result<OperationReport, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::restore(&mut store, &id).map_err(UiError::vault)
     })
     .await
     .map_err(UiError::internal)?
@@ -268,7 +244,8 @@ fn main() {
             export_diagnostic,
             open_output_folder,
             attribute_operation,
-            protection_status
+            protection_status,
+            restore_attributes
         ])
         .run(tauri::generate_context!())
         .expect("FoldSentinel 桌面程序启动失败");

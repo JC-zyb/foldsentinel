@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
 import { previewPage, PREVIEW_PAGE_SIZE } from '../ui/preview.ts';
-import { attributeKeys, attributeStateKeys } from '../ui/attributes.ts';
 
 test('separate selections accumulate files and folders without duplicate Windows paths', () => {
   const file = String.raw`D:\work\alpha.txt`;
@@ -115,15 +114,6 @@ test('language selection and interpolation contracts match in both catalogs', ()
     const placeholders = value => [...value.matchAll(/\{([^}]+)\}/g)].map(m => m[1]).sort();
     assert.deepEqual(placeholders(zh), placeholders(en), key);
   }
-});
-
-test('attribute status distinguishes unavailable reads, unmanaged flags and policy mismatches', () => {
-  assert.deepEqual(attributeKeys(null), ['attributeUnavailable']);
-  assert.deepEqual(attributeKeys(0x20), ['attributeArchive']);
-  assert.deepEqual(attributeKeys(0x17), ['attributeHidden', 'attributeSystem', 'attributeReadonly', 'attributeDirectory']);
-  assert.deepEqual(attributeKeys(0), ['attributeNone']);
-  for (const key of Object.values(attributeStateKeys)) assert.ok(messages[key]);
-  assert.notEqual(attributeStateKeys.changed, attributeStateKeys.unreadable);
 });
 
 test('preview paging is bounded, clamps indices and handles empty folders', () => {
