@@ -101,7 +101,7 @@ export const messages = {
   staging: ['待清理：{path}', 'Temporary data: {path}'], cleanup: ['清理并重填', 'Clean up & refill'],
   cleanupDone: ['临时数据已清理，路径已重填。请重新输入密码并加入队列。', 'Temporary data cleaned and paths refilled. Enter the password and add to the queue.'],
   emptyJobs: ['没有需要清理的中断任务。', 'No interrupted task data to clean up.'],
-  attributeNotice: ['文件属性用于减少误操作，不提供密码加密。能修改属性的用户仍可访问内容。', 'File attributes reduce accidental changes. They do not encrypt content; users who can change attributes can still access it.'],
+  attributeNotice: ['文件属性用于减少误操作，不提供密码加密。隐藏策略同时设置系统属性，使资源管理器在默认设置下继续隐藏；如果关闭“隐藏受保护的操作系统文件”，或使用其他文件管理器，仍可能看到内容。', 'File attributes reduce accidental changes; they do not encrypt content. The hidden policy also sets the System flag so Explorer keeps it hidden with its default protected-file setting. If that setting is disabled, or another file manager is used, the item can still be visible.'],
   manageAttributes: ['管理文件属性', 'Manage file attributes'], attributePath: ['文件或文件夹路径', 'File or folder path'],
   pickFile: ['选文件', 'Choose file'], pickFolder: ['选文件夹', 'Choose folder'],
   policy: ['应用策略', 'Attribute policy'], hiddenReadonly: ['隐藏 + 只读', 'Hidden + read-only'], hidden: ['仅隐藏', 'Hidden'], readonly: ['仅只读', 'Read-only'],

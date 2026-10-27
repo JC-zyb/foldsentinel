@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const STATE_VERSION: u32 = 1;
-const MANAGED_ATTRIBUTES: u32 = attributes::HIDDEN | attributes::READONLY;
+const MANAGED_ATTRIBUTES: u32 = attributes::HIDDEN | attributes::SYSTEM | attributes::READONLY;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -24,9 +24,13 @@ pub enum ProtectionMode {
 impl ProtectionMode {
     pub fn apply(self, original: u32) -> u32 {
         match self {
-            Self::Hidden => original | attributes::HIDDEN,
+            // Explorer 的“显示隐藏的项目”只绕过 HIDDEN；同时设置 SYSTEM，
+            // 让默认的“隐藏受保护的操作系统文件”仍然生效。
+            Self::Hidden => original | attributes::HIDDEN | attributes::SYSTEM,
             Self::Readonly => original | attributes::READONLY,
-            Self::HiddenReadonly => original | attributes::HIDDEN | attributes::READONLY,
+            Self::HiddenReadonly => {
+                original | attributes::HIDDEN | attributes::SYSTEM | attributes::READONLY
+            }
         }
     }
 }
@@ -328,9 +332,9 @@ mod tests {
     #[test]
     fn mode_application_preserves_existing_attributes() {
         let original = 0x20;
-        assert_eq!(ProtectionMode::Hidden.apply(original), 0x22);
+        assert_eq!(ProtectionMode::Hidden.apply(original), 0x26);
         assert_eq!(ProtectionMode::Readonly.apply(original), 0x21);
-        assert_eq!(ProtectionMode::HiddenReadonly.apply(original), 0x23);
+        assert_eq!(ProtectionMode::HiddenReadonly.apply(original), 0x27);
     }
 
     #[test]
@@ -414,7 +418,7 @@ mod tests {
         store.protect(&source, ProtectionMode::Hidden).unwrap();
         assert_eq!(
             attributes::read(&file).unwrap() & MANAGED_ATTRIBUTES,
-            attributes::HIDDEN
+            attributes::HIDDEN | attributes::SYSTEM
         );
         store.unprotect(&source).unwrap();
         assert_eq!(attributes::read(&file).unwrap(), original);

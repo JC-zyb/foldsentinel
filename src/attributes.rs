@@ -9,6 +9,7 @@ use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 
 pub const HIDDEN: u32 = 0x0000_0002;
+pub const SYSTEM: u32 = 0x0000_0004;
 pub const READONLY: u32 = 0x0000_0001;
 
 pub fn read(path: &Path) -> Result<u32> {
