@@ -2,9 +2,11 @@
 
 文件夹哨兵：使用 Rust + Tauri 2 构建的开源 Windows 文件保护工具。支持中英双语、文件 / 文件夹流式密码加密包、串行任务队列、完整验证后的内容预览、历史与重试，以及可恢复的隐藏、只读属性管理。
 
-## 使用 v0.5 预览版
+## 使用 v0.6.0（开发版）
 
-在 [Releases](https://github.com/JC-zyb/foldsentinel/releases) 下载 Windows x64 安装包或便携版。系统需要 Windows 10/11 与 Microsoft Edge WebView2 Runtime；安装器可按需获取 Runtime，便携版需提前具备 Runtime。当前版本未做代码签名。
+当前源码、界面和本地构建版本为 **v0.6.0**，尚未发布对应 Release。以下使用说明以 v0.6.0 为准；可按下文“开发与构建”生成安装包或便携版。GitHub 已发布的最新预览版为 [v0.4.0](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.4.0)，其功能以该版本发布说明为准。
+
+系统需要 Windows 10/11 x64 与 Microsoft Edge WebView2 Runtime；安装器可按需获取 Runtime，便携版需提前具备 Runtime。当前版本未做代码签名。
 
 1. 右上角选择 **简体中文 / English**；首次使用遵循系统首选语言，选择会在重启后保留。
 2. 在 **创建加密包 / Encrypt** 中选择多个文件、文件夹或直接拖入窗口；分次选择或拖入会追加并去重，也可展开 **手动输入或编辑路径 / Enter or edit paths**，每行填写一个完整路径。下方清单可逐项移除或清空；重复与父子目录重叠会提示，须消除重叠再加入队列。可选输出目录，留空使用各源文件的父目录；加密文件夹的输出必须位于源目录之外。
