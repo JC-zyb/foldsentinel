@@ -20,7 +20,7 @@ cargo run --release --locked --example validate_attributes -- --report <新报�
 
 浏览器 UI 完成三种加密包操作及属性页面 × 中英双语 × 六组宽度/DPR，共 48 组布局检查。属性页使用真实组件加合成状态 / 根路径，仅用于排版和文本转义检查，没有 IPC 或文件操作成功模拟。长中文根路径、属性明细和按钮无水平溢出，含 HTML 字样的路径仍按文本显示；报告见 [双语布局](validation/v06-ui-layout-windows.json)，截图保留在本地 `work/v06-layout-roots/screenshots`。浏览器 DPR 不替代原生 Windows DPI。
 
-Vite 监听排除 `work` 测试目录，避免隔离 WebView2 锁定 Cookies 等资料文件导致 `EBUSY`；开发服务恢复运行且上述 48 组检查通过。UI 源文件继续受监听。GUI、CLI 与 NSIS 在本机构建成功，交付包及 SHA-256 由打包脚本验证。
+Vite 监听排除 `work` 测试目录，避免隔离 WebView2 锁定 Cookies 等资料文件导致 `EBUSY`；开发服务恢复运行且上述 48 组检查通过。打包时又发现 `artifacts` 安装包锁定会触发相同错误，因此同时排除交付目录。已有目标产物和测试资料时开发服务 HTTP 返回 200，监听清单保留 `ui` 源文件并排除三个产物 / 测试目录。GUI、CLI 与 NSIS 在本机构建成功，交付包及 SHA-256 由打包脚本验证。
 
 **待验证**：本阶段远程 Windows CI、NSIS 安装升级 / 卸载及 VHD 写满尚未运行，不能引用 v0.4 结果作为本次通过证据。缺少 WebView2 的干净 Windows 10/11 虚拟机、完全干净系统与原生 125%/150% DPI 仍待环境。ACL 仅有[设计与验收条件](LOCKING.md)，本版没有权限锁定入口或 ACL 实验结果；Hidden/System 不是访问隔离。
 

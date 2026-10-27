@@ -16,7 +16,7 @@ Status: implemented
 
 `validate-ui.mjs` 接受已有 Playwright 和浏览器路径，在隔离上下文中仅访问本机开发服务，检查中英布局、长路径、语言偏好和键盘焦点，不自动安装依赖、不模拟桌面操作成功。浏览器 deviceScaleFactor 仅是渲染检查，不能替代原生 Windows DPI 验收；真实旧版数据由独立桌面升级验证记录。
 
-Vite 开发监听排除 `target` 构建目录和 `work` 隔离测试目录：Rust 构建替换二进制及测试用 WebView2 锁定资料文件曾导致 Windows watcher 以 `EBUSY` 退出。保留 UI 源文件热更新；不采用高 CPU 轮询或吞掉 watcher 异常。
+Vite 开发监听排除 `target` 构建目录、`work` 隔离测试目录和 `artifacts` 交付目录：Rust 构建替换二进制、测试用 WebView2 锁定资料及安装包生成曾导致 Windows watcher 以 `EBUSY` 退出。保留 UI 源文件热更新；不采用高 CPU 轮询或吞掉 watcher 异常。
 
 `validate_upgrade` 使用从旧版本源码构建的 worker，在自有临时目录真实创建加密和恢复登记，检查活动锁后在提交前终止该子进程。当前核心读取旧记录、验证所有者、清理并重试，核对源与恢复内容。报告记录 worker SHA-256，验证记录另列源 tag 和 commit；此项覆盖实际旧记录语义，但不代表安装升级或真实用户文件已验收。
 
