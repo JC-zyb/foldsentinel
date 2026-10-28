@@ -1908,7 +1908,12 @@ mod tests {
             record.locked,
             acl::current_sid().unwrap()
         );
-        object.write(&altered).unwrap();
+        object.write(&altered).unwrap_or_else(|error| {
+            panic!(
+                "测试授权写入失败: {error}; expected={altered}; actual={:?}",
+                object.read()
+            );
+        });
         let saved = fs::read(&state).unwrap();
         assert!(store.unprotect(&root).is_err());
         let token = store.review_acl_restore(&root).unwrap();
@@ -1943,7 +1948,12 @@ mod tests {
         let object = acl::Object::open(&root).unwrap();
         let before = object.read().unwrap();
         let altered = format!("{before}(A;OICI;FA;;;{})", acl::current_sid().unwrap());
-        object.write(&altered).unwrap();
+        object.write(&altered).unwrap_or_else(|error| {
+            panic!(
+                "测试授权写入失败: {error}; expected={altered}; actual={:?}",
+                object.read()
+            );
+        });
         let saved = fs::read(&state).unwrap();
         assert!(store.unprotect_after_acl_review(&root, &token).is_err());
         assert_eq!(fs::read(&state).unwrap(), saved);
