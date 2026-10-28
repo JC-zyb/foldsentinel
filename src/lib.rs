@@ -1903,11 +1903,12 @@ mod tests {
             .lock
             .clone()
             .unwrap();
-        let altered = format!(
+        let altered = acl::normalize_test_sddl(&format!(
             "{}(A;OICI;FA;;;{})",
             record.locked,
             acl::current_sid().unwrap()
-        );
+        ))
+        .unwrap();
         object.write(&altered).unwrap_or_else(|error| {
             panic!(
                 "测试授权写入失败: {error}; expected={altered}; actual={:?}",
@@ -1947,7 +1948,11 @@ mod tests {
         let token = store.review_acl_restore(&root).unwrap();
         let object = acl::Object::open(&root).unwrap();
         let before = object.read().unwrap();
-        let altered = format!("{before}(A;OICI;FA;;;{})", acl::current_sid().unwrap());
+        let altered = acl::normalize_test_sddl(&format!(
+            "{before}(A;OICI;FA;;;{})",
+            acl::current_sid().unwrap()
+        ))
+        .unwrap();
         object.write(&altered).unwrap_or_else(|error| {
             panic!(
                 "测试授权写入失败: {error}; expected={altered}; actual={:?}",

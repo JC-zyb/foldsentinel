@@ -103,6 +103,11 @@ mod windows {
         }
         Ok(Local(value))
     }
+    #[cfg(test)]
+    pub fn normalize_test_sddl(text: &str) -> Result<String> {
+        let value = descriptor(text)?;
+        sddl(value.0)
+    }
     fn dacl(value: &Local) -> Result<*mut ACL> {
         let mut present = 0;
         let mut acl = null_mut();
@@ -507,6 +512,8 @@ pub fn equivalent(a: &str, b: &str) -> bool {
     }
     normalized(a) == normalized(b)
 }
+#[cfg(all(test, windows))]
+pub use windows::normalize_test_sddl;
 #[cfg(windows)]
 pub use windows::{Object, current_sid};
 #[cfg(not(windows))]
