@@ -20,6 +20,8 @@ Hidden/System 只影响文件显示，Readonly 对文件夹不提供写保护。
 
 历史审计：[属性状态](../../implemented/feature/2026-10-27-attribute-status.md) 与[属性恢复](../../implemented/bug-fix/2026-10-24-recoverable-attributes.md) 部分重叠，仅复用显式状态与先登记原则，不能直接复用掩码恢复；[加密边界](../../implemented/architecture/2026-10-24-vault-and-desktop.md) 部分重叠，保留内容加密，锁定不替代它。没有完全吸收或废弃旧笔记。
 
+权限漂移后的独立自助出口见[显式确认恢复](../../implemented/bug-fix/2026-10-27-reviewed-acl-recovery.md)；默认解除仍保留本篇的严格冲突停止原则。
+
 ## Alternatives considered
 
 - 只用现有只读属性实现最简单，但目录不受其写保护，无法满足防删除 / 防写入；保留属性功能并单独评估 ACL。

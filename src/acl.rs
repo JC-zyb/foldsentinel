@@ -439,6 +439,15 @@ mod windows {
                 })
             }
         }
+        pub fn review_restore(&self, record: &LockRecord) -> Result<String> {
+            if record.version != 1 || self.identity()? != record.identity {
+                bail!(crate::vault::ErrorCode::ProtectionConflict);
+            }
+            // 确认恢复允许覆盖 DACL 漂移，但原始描述符和对象身份必须有效。
+            let original = descriptor(&record.original)?;
+            dacl(&original)?;
+            self.read()
+        }
         pub fn verify(&self, record: &LockRecord) -> Result<String> {
             if record.version != 1 || self.identity()? != record.identity {
                 bail!(crate::vault::ErrorCode::ProtectionConflict);
@@ -508,6 +517,9 @@ pub fn current_sid() -> Result<String> {
 pub struct Object;
 #[cfg(not(windows))]
 impl Object {
+    pub fn review_restore(&self, _: &LockRecord) -> Result<String> {
+        anyhow::bail!("权限恢复仅支持 Windows NTFS")
+    }
     pub fn read_parent(_: &Path) -> Result<String> {
         anyhow::bail!("锁定仅支持 Windows NTFS")
     }

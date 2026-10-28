@@ -9,6 +9,7 @@ const modeKeys = { none: 'noProtection', hidden: 'hidden', locked: 'locked', rea
 export interface ManagedRoot { id: string; name: string; mode?: ProtectionMode | null; note?: string; duplicate_name?: boolean }
 export interface RootVerification { state: 'consistent' | 'changed' | 'unavailable'; checked_at: number }
 export interface RootRecordOptions {
+  aclRestoreConfirmation?: { confirm: () => void; cancel: () => void };
   verify?: () => void;
   saveNote?: (note: string) => void;
   noteDraft?: string;
@@ -132,6 +133,16 @@ export function createRootRecord(root: ManagedRoot, restore: () => void, apply?:
   if (options.feedback) {
     const feedback = document.createElement('p'); feedback.className = `root-feedback${options.feedback.error ? ' is-error' : ''}`;
     feedback.setAttribute('role', options.feedback.error ? 'alert' : 'status'); feedback.textContent = options.feedback.text; item.append(feedback);
+  }
+  if (options.aclRestoreConfirmation) {
+    const panel = document.createElement('section'); panel.className = 'protection-confirm root-acl-confirm';
+    panel.setAttribute('aria-label', t('aclRestoreTitle'));
+    const heading = document.createElement('h3'); heading.textContent = t('aclRestoreTitle');
+    const help = document.createElement('p'); help.textContent = t('aclRestoreHelp');
+    const controls = document.createElement('div'); controls.className = 'selection-actions';
+    controls.append(action('confirm-acl-restore', t('confirmAclRestore'), options.aclRestoreConfirmation.confirm, 'primary'),
+      action('cancel-acl-restore', t('cancel'), options.aclRestoreConfirmation.cancel));
+    panel.append(heading, help, controls); item.append(panel);
   }
 
   function updateControls(): void {

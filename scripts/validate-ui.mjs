@@ -33,6 +33,7 @@ try {
       // Vite 的 HMR 长连接不作为界面就绪条件；等待实际控件可操作。
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.locator('#language').selectOption('en');
+      assert.equal(await page.locator('.queue-overview').isVisible(), false, '空队列不应在主要操作前重复显示摘要');
       await page.locator('#manual-sources > summary').click();
       for (const operation of ['encrypt', 'decrypt', 'verify']) {
         await page.locator(`#${operation}-tab`).click();
@@ -47,6 +48,10 @@ try {
           assert.equal(await page.locator('#password').inputValue(), 'public-layout-test-only');
           if (operation === 'encrypt') assert.equal(await page.locator('#confirm-password').inputValue(), 'public-layout-test-only');
           assert.equal(await page.locator('#source-list > li').count(), 2);
+          const lastRemove = await page.locator('#source-list > li button').last().boundingBox();
+          const sourceList = await page.locator('#source-list').boundingBox();
+          assert.ok(lastRemove && sourceList && lastRemove.y + lastRemove.height <= sourceList.y + sourceList.height + 1,
+            JSON.stringify({ width, scale, language, lastRemove, sourceList }));
           const layout = await page.evaluate(() => {
             const outside = [...document.querySelectorAll('button, input, select, textarea, summary')].filter(element => {
               const box = element.getBoundingClientRect();
@@ -143,7 +148,33 @@ try {
           syncRootControls(document.querySelector('#root-list'), false, false);
         });
         assert.equal(await page.locator('#record-list, #state-location').count(), 0, '内部明细和状态文件位置不进入页面');
-        assert.equal(await page.locator('#root-list .root-record').count(), 3);
+        await page.evaluate(async () => {
+          const { createRootRecord, syncRootControls } = await import('/ui/attributes.ts');
+          window.aclRestoreActions = [];
+          const roots = document.querySelector('#root-list');
+          const ordinary = createRootRecord({ id: 'ordinary-id', name: '普通解除项目', mode: 'locked' }, () => window.aclRestoreActions.push('restore'));
+          const confirmation = createRootRecord({ id: 'confirm-id', name: '待确认恢复项目', mode: 'locked' }, () => {}, undefined, {
+            aclRestoreConfirmation: { confirm: () => window.aclRestoreActions.push('confirm'), cancel: () => window.aclRestoreActions.push('cancel') }
+          });
+          roots.append(ordinary, confirmation);
+          for (const [busy, stale] of [[true, false], [false, true]]) {
+            syncRootControls(roots, busy, stale);
+            for (const button of roots.querySelectorAll('[data-root-action="restore"], [data-root-action$="-acl-restore"]')) {
+              if (!button.disabled) throw new Error('核查及确认恢复必须遵循忙碌和过期禁用状态');
+            }
+          }
+          syncRootControls(roots, false, false);
+        });
+        assert.equal(await page.locator('#root-list [data-root-action=review-acl-restore]').count(), 0, '恢复冲突不应再增加独立操作按钮');
+        assert.equal(await page.locator('#root-list [data-root-action=restore]').count(), 5, '每条保护项目继续只有原有解除入口');
+        await page.locator('#root-list [data-root-action=restore]').nth(3).click();
+        await page.locator('[data-root-action=cancel-acl-restore]').click();
+        await page.locator('[data-root-action=confirm-acl-restore]').click();
+        assert.deepEqual(await page.evaluate(() => window.aclRestoreActions), ['restore', 'cancel', 'confirm']);
+        assert.equal(await page.locator('#root-list .protection-confirm p').count(), 1, '权限覆盖影响必须显示在确认区域');
+        assert.equal(await page.locator('#root-list .root-acl-confirm h3').count(), 1, '权限覆盖确认必须使用匹配样式的标题层级');
+        assert.equal(await page.locator('#root-list .root-acl-confirm').evaluate(element => getComputedStyle(element).color), 'rgb(120, 70, 0)', '权限覆盖确认使用警示色，不借用成功状态色');
+        assert.equal(await page.locator('#root-list .root-record').count(), 5);
         assert.equal(await page.locator('#root-list img').count(), 0, '最外层名称必须按文本显示');
         const markup = await page.locator('#attributes-panel').evaluate(element => element.outerHTML);
         for (const secret of ['private-parent', 'private-child', 'state.json']) assert.ok(!markup.includes(secret), `属性页面不得包含 ${secret}`);
@@ -160,7 +191,7 @@ try {
         assert.deepEqual(layout.outside, [], JSON.stringify({ width, scale, language, layout }));
         const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
-        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, screenshot });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, one_restore_entry_point_with_confirmation_on_conflict: true, screenshot });
       }
       await page.locator('#language').focus();
       await page.keyboard.press('Tab');
@@ -174,6 +205,22 @@ try {
     } finally {
       await context.close();
     }
+  }
+  const queuedContext = await browser.newContext({ viewport: { width: 1080, height: 820 }, locale: 'zh-CN' });
+  try {
+    await queuedContext.addInitScript(() => localStorage.setItem('foldsentinel.history.v1', JSON.stringify([
+      { id: 'ui-review-completed', input: 'D:\\ui-review\\completed.fse', output: null, operation: 'verify', status: 'succeeded', createdAt: 2, endedAt: 3 }
+    ])));
+    const page = await queuedContext.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.locator('#language').selectOption('zh-CN');
+    assert.equal(await page.locator('#queue-overview').isVisible(), false, '只有完成历史时不重复显示顶部摘要');
+    assert.equal(await page.locator('#queue-controls').isVisible(), false, '没有待处理任务时隐藏空队列控制');
+    assert.equal(await page.locator('#queue-summary').isVisible(), true, '任务汇总保留在队列区域');
+    checks.push({ operation: 'queue-overview', completed_only_top_summary_hidden: true, empty_controls_hidden: true, queue_summary_retained: true });
+  } finally {
+    await queuedContext.close();
   }
   assert.deepEqual(errors, []);
 } catch (error) {

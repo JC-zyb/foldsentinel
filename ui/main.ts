@@ -29,7 +29,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div id="recovery-alert" class="notice recovery-alert" role="status" hidden><p id="recovery-alert-text"></p><button id="review-recovery" type="button" class="secondary" ${text('reviewRecovery')}></button></div>
       <div id="attribute-alert" class="notice recovery-alert" role="status" hidden><p id="attribute-alert-text"></p><button id="review-attributes" type="button" class="secondary" ${text('reviewAttributes')}></button></div>
       <div class="segmented" role="group"><button id="encrypt-tab" aria-pressed="true" ${text('encrypt')}></button><button id="decrypt-tab" aria-pressed="false" ${text('decrypt')}></button><button id="verify-tab" aria-pressed="false" ${text('verify')}></button></div>
-      <div class="queue-overview"><span id="queue-overview-text" role="status"></span><button id="review-queue" type="button" class="text-button" ${text('reviewQueue')}></button></div>
+      <div id="queue-overview" class="queue-overview" hidden><span id="queue-overview-text" role="status"></span><button id="review-queue" type="button" class="text-button" ${text('reviewQueue')}></button></div>
       <form id="vault-form" class="panel"><fieldset id="vault-fields"><legend class="sr-only" ${text('vault')}></legend>
         <div class="section-heading"><span class="step">1</span><div><h2 ${text('selection')}></h2><p id="source-help"></p></div></div>
         <div class="source-picker"><p id="drop-help"></p><div class="selection-actions"><button id="pick-file" type="button" class="secondary" ${text('pickFiles')}></button><button id="pick-folder" type="button" class="secondary" ${text('pickFolders')}></button></div></div>
@@ -43,7 +43,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <details class="usage-details"><summary ${text('usageDetails')}></summary><p class="field-help" ${text('formatLimits')}></p><p class="field-help" ${text('passwordMemory')}></p></details>
       </fieldset></form>
       <section id="package-preview" class="panel preview-panel" hidden aria-labelledby="preview-title"><div class="records-heading"><h2 id="preview-title" ${text('previewTitle')}></h2><button id="close-preview" type="button" class="text-button" ${text('closePreview')}></button></div><p id="preview-package" class="preview-package"></p><p class="notice" ${text('previewAuthenticated')}></p><p id="preview-summary" class="preview-summary"></p><p id="preview-limit" class="notice" hidden></p><p id="preview-empty" class="field-help" hidden ${text('emptyPackage')}></p><div class="preview-table-scroll" tabindex="0" role="region" aria-labelledby="preview-title"><table id="preview-table"><caption class="sr-only" ${text('previewTitle')}></caption><thead><tr><th scope="col" ${text('previewPath')}></th><th scope="col" ${text('previewType')}></th><th scope="col" ${text('previewSize')}></th></tr></thead><tbody id="preview-entries"></tbody></table></div><div class="preview-pagination"><span id="preview-page" role="status"></span><div class="selection-actions"><button id="preview-previous" type="button" class="secondary" ${text('previousPage')}></button><button id="preview-next" type="button" class="secondary" ${text('nextPage')}></button><button id="preview-restore" type="button" class="primary" ${text('prepareRestore')}></button></div></div><p class="field-help" ${text('previewPrivacy')}></p></section>
-      <section class="records queue"><h2 ${text('queue')}></h2><div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div><div class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul><details id="history-panel" class="history-panel"><summary id="history-summary"></summary><div class="records-heading"><p class="field-help" ${text('queueHelp')}></p><button id="clear-history" type="button" class="text-button" ${text('clearHistory')}></button></div><ul id="history-list"></ul></details></section>
+      <section class="records queue"><h2 ${text('queue')}></h2><div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div><div id="queue-controls" class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul><details id="history-panel" class="history-panel"><summary id="history-summary"></summary><div class="records-heading"><p class="field-help" ${text('queueHelp')}></p><button id="clear-history" type="button" class="text-button" ${text('clearHistory')}></button></div><ul id="history-list"></ul></details></section>
       <section class="records recovery"><div class="records-heading"><h2 ${text('jobs')}></h2><button id="refresh-jobs" class="text-button" ${text('refreshJobs')}></button></div><p class="field-help" ${text('jobsHelp')}></p><ul id="job-list"></ul></section>
     </section>
     <section id="attributes-panel" hidden>
@@ -107,6 +107,7 @@ let protectionBusyKey: MessageKey = 'workingProtection';
 interface ProtectionFeedback { key?: MessageKey; values?: Record<string, string | number>; code?: string; error?: boolean }
 const rootFeedback = new Map<string, ProtectionFeedback>();
 const rootVerification = new Map<string, RootVerification>();
+const aclRestoreReviews = new Map<string, string>();
 const rootRowIds = new WeakMap<HTMLElement, string>();
 const pendingRootModes = new Map<string, ProtectionMode>();
 const rootNoteDrafts = new Map<string, string>();
@@ -182,6 +183,9 @@ function syncControls(): void {
   document.querySelectorAll<HTMLButtonElement>('#job-list button').forEach(button => { button.disabled = uiBusy || queue.running; });
   element<HTMLButtonElement>('start-queue').disabled = uiBusy || queue.running || !queue.tasks.some(t => t.status === 'waiting');
   element<HTMLButtonElement>('pause-queue').disabled = !queue.running;
+  element<HTMLButtonElement>('start-queue').hidden = queue.running;
+  element<HTMLButtonElement>('pause-queue').hidden = !queue.running;
+  element('queue-controls').hidden = !queue.running && !queue.tasks.some(task => task.status === 'waiting');
   element<HTMLButtonElement>('retry-batch').disabled = uiBusy || !queue.tasks.some(task => task.batchId === [...queue.tasks].reverse().find(item => item.batchId)?.batchId && task.status === 'failed');
   element<HTMLButtonElement>('preview-restore').disabled = uiBusy || queue.running;
   for (const mode of ['encrypt', 'decrypt', 'verify']) element<HTMLButtonElement>(`${mode}-tab`).disabled = uiBusy;
@@ -372,7 +376,8 @@ function renderTasks(): void {
   const count = (status: string) => queue.tasks.filter(t => t.status === status).length;
   const queueText = t('queueSummary', { waiting: count('waiting'), running: count('running'), done: count('succeeded'), failed: count('failed'), stopped: count('cancelled') + count('interrupted') });
   element('queue-summary').textContent = queueText;
-  element('queue-overview-text').textContent = count('waiting') && !queue.running ? t('queueNotStarted', { n: count('waiting') }) : queueText;
+  element('queue-overview-text').textContent = count('waiting') && !queue.running ? t('queueNotStarted', { n: count('waiting') }) : t('queueRunningOverview');
+  element('queue-overview').hidden = !queue.running && count('waiting') === 0;
   const latestBatch = [...queue.tasks].reverse().find(task => task.batchId)?.batchId;
   const batch = queue.tasks.filter(task => task.batchId === latestBatch && latestBatch !== undefined);
   element('batch-result').hidden = batch.length === 0;
@@ -394,6 +399,7 @@ function renderTasks(): void {
     lastFailureId = latestFailure.id;
   }
   element('history-summary').textContent = t('historyCount', { n: new Intl.NumberFormat(language).format(finished.length) });
+  element('queue-summary').hidden = queue.tasks.length === 0;
   for (const [target, emptyKey] of [[list, 'emptyPending'], [history, 'emptyHistory']] as const) {
     if ((target === list ? pending : finished).length) continue;
     const empty = document.createElement('li'); empty.className = 'empty-records'; empty.textContent = t(emptyKey); target.append(empty);
@@ -465,6 +471,7 @@ function renderRecordsFeedback(): void {
   syncControls();
 }
 async function refreshRecords(offset = recordState.snapshot?.offset ?? 0): Promise<void> {
+  aclRestoreReviews.clear();
   closeRestoreSelection();
   const loading = recordState.refresh(() => invoke<Snapshot>('protection_status', { offset, query: recordsQuery }));
   renderRecordsFeedback();
@@ -491,6 +498,10 @@ function renderRecords(): void {
       noteDraft: rootNoteDrafts.get(root.id),
       onNoteDraft: note => { if (note === undefined) rootNoteDrafts.delete(root.id); else rootNoteDrafts.set(root.id, note); },
       verification: rootVerification.get(root.id),
+      aclRestoreConfirmation: aclRestoreReviews.has(root.id) ? {
+        confirm: () => { void confirmAclRestore(root.id); },
+        cancel: () => { aclRestoreReviews.delete(root.id); renderRecords(); restoreRecordFocus({ id: root.id, action: 'restore', index: 0 }, false); },
+      } : undefined,
       feedback: rootFeedback.has(root.id) ? { text: protectionText(rootFeedback.get(root.id)!), error: rootFeedback.get(root.id)!.error } : undefined,
       busy: uiBusy || queue.running, stale: recordState.stale,
     });
@@ -510,8 +521,11 @@ function syncProtectionSelection(): void {
   const select = input('select-protection-page');
   select.checked = !!roots.length && count === roots.length; select.indeterminate = count > 0 && count < roots.length;
   select.disabled = blocked || !roots.length;
-  element('selected-protection-count').textContent = t('selectedProtectionCount', { n: count });
-  for (const id of ['verify-selected-protection', 'restore-selected-protection', 'confirm-selected-restore']) element<HTMLButtonElement>(id).disabled = blocked || !count;
+  const selectedCount = element('selected-protection-count'); selectedCount.textContent = t('selectedProtectionCount', { n: count }); selectedCount.hidden = count === 0;
+  for (const id of ['verify-selected-protection', 'restore-selected-protection']) {
+    const button = element<HTMLButtonElement>(id); button.hidden = count === 0; button.disabled = blocked;
+  }
+  element<HTMLButtonElement>('confirm-selected-restore').disabled = blocked || !count;
   element<HTMLButtonElement>('cancel-selected-restore').disabled = uiBusy || queue.running;
 }
 function closeRestoreSelection(): void { restoreSelection = []; element('protection-restore-confirm').hidden = true; }
@@ -564,21 +578,41 @@ function recordFocus(): { id: string; action: string; index: number } | null {
   const id = row && rootRowIds.get(row);
   return row && id ? { id, action: active?.dataset.rootAction ?? 'apply', index: Array.from(element('root-list').children).indexOf(row) } : null;
 }
-function restoreRecordFocus(focus: ReturnType<typeof recordFocus>): void {
+function restoreRecordFocus(focus: ReturnType<typeof recordFocus>, preventScroll = true): void {
   if (!focus || page !== 'attributes') return;
   const rows = Array.from(element('root-list').querySelectorAll<HTMLElement>('.root-record'));
   const row = rows.find(row => rootRowIds.get(row) === focus.id) ?? rows[Math.min(focus.index, rows.length - 1)];
   const target = row?.querySelector<HTMLElement>(`[data-root-action="${CSS.escape(focus.action)}"]:not(:disabled)`) ?? row?.querySelector<HTMLElement>('button:not(:disabled)');
-  (target ?? element('roots-title')).focus({ preventScroll: true });
+  (target ?? element('roots-title')).focus({ preventScroll });
 }
-async function runRootAction(id: string, busyKey: MessageKey, action: () => Promise<void>, successKey: MessageKey, invalidate = false): Promise<void> {
+async function runRootAction(id: string, busyKey: MessageKey, action: () => Promise<void>, successKey: MessageKey, invalidate = false, reviewAclOnConflict = false): Promise<void> {
   if (uiBusy || queue.running || recordState.stale) return;
   if (!isTauri()) { rootFeedback.set(id, { key: 'desktopRequired', error: true }); renderRecords(); return; }
+  aclRestoreReviews.delete(id);
   const focus = recordFocus(); protectionBusyKey = busyKey;
   rootFeedback.set(id, { key: busyKey }); renderRecords();
+  let awaitingAclConfirmation = false;
   await runUi(async () => {
     const result = await runProtectionAction(action, () => refreshRecords());
     if (invalidate) { rootVerification.delete(id); if (result.operationSucceeded) pendingRootModes.delete(id); }
+    if (!result.operationSucceeded && result.refreshSucceeded && reviewAclOnConflict
+      && failureCode(result.operationError) === 'protection_conflict'
+      && recordState.snapshot?.roots.some(root => root.id === id)) {
+      try {
+        const review = await invoke<{ token: string }>('review_restore_attributes', { id });
+        if (!review || typeof review.token !== 'string' || !/^[a-f0-9]{64}$/.test(review.token)) throw { code: 'internal' };
+        aclRestoreReviews.set(id, review.token);
+        rootFeedback.delete(id);
+        awaitingAclConfirmation = true;
+      } catch (error) {
+        result.operationError = error;
+      }
+    }
+    if (awaitingAclConfirmation) {
+      recordNotice = null;
+      renderRecords();
+      return;
+    }
     const feedback: ProtectionFeedback = result.operationSucceeded ? { key: successKey }
       : { code: failureCode(result.operationError), error: true };
     rootFeedback.set(id, feedback);
@@ -588,13 +622,22 @@ async function runRootAction(id: string, busyKey: MessageKey, action: () => Prom
       : recordState.snapshot?.roots.some(root => root.id === id) ? null : feedback;
     renderRecords();
   });
-  restoreRecordFocus(focus);
+  restoreRecordFocus(awaitingAclConfirmation
+    ? { id, action: 'cancel-acl-restore', index: focus?.index ?? 0 } : focus, !awaitingAclConfirmation);
 }
 async function changeProtection(id: string, mode?: ProtectionMode): Promise<void> {
   const restoring = !mode || mode === 'none';
   await runRootAction(id, restoring ? 'restoringProtection' : 'applyingProtection',
     async () => { if (mode) await invoke('set_protection_mode', { id, mode }); else await invoke('restore_attributes', { id }); },
-    restoring ? 'attributeRestored' : 'attributeApplied', true);
+    restoring ? 'attributeRestored' : 'attributeApplied', true, restoring);
+}
+async function confirmAclRestore(id: string): Promise<void> {
+  const token = aclRestoreReviews.get(id);
+  if (!token) return;
+  await runRootAction(id, 'restoringProtection', async () => {
+    await invoke('restore_attributes_after_review', { id, token });
+    selectedProtection.delete(id); rootNoteDrafts.delete(id);
+  }, 'attributeRestored', true);
 }
 async function verifyRoot(id: string): Promise<void> {
   await runRootAction(id, 'checkingProtection', async () => { rootVerification.set(id, await invoke<RootVerification>('verify_protection', { id })); }, 'verificationDone');

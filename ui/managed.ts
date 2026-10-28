@@ -22,6 +22,7 @@ export class ManagedProtectionUi {
   private available = false;
   private visible = false;
   private editor: { kind: EditorKind; root?: ServiceRoot } | null = null;
+  private editorOrigin: { id: string | null; action: string } | null = null;
   private feedback: Feedback | null = null;
   private rowFeedback = new Map<string, Feedback>();
   private rowIds = new WeakMap<HTMLElement, string>();
@@ -39,9 +40,9 @@ export class ManagedProtectionUi {
   private feedbackText(feedback: Feedback): string { return feedback.code === 'authentication' ? t('managedAuthenticationFailed') : feedback.code ? errorText(feedback.code) : t(feedback.key!, feedback.values); }
 
   clearPasswords(): void { this.container.querySelectorAll<HTMLInputElement>('input[type=password]').forEach(input => { input.value = ''; }); }
-  translate(): void { this.clearPasswords(); this.editor = null; this.render(); }
+  translate(): void { this.clearPasswords(); this.editor = null; this.editorOrigin = null; this.render(); }
   setVisible(visible: boolean): void {
-    this.visible = visible; this.clearPasswords(); this.editor = null; this.render();
+    this.visible = visible; this.clearPasswords(); this.editor = null; this.editorOrigin = null; this.render();
     if (!visible) { if (this.poll) clearTimeout(this.poll); this.poll = null; }
     else if (this.options.isDesktop()) { void this.refresh(); }
   }
@@ -73,7 +74,7 @@ export class ManagedProtectionUi {
   }
   async refresh(automatic = false): Promise<void> {
     if (this.loading || this.options.isBlocked() || !this.options.isDesktop()) return;
-    if (!automatic) { this.clearPasswords(); this.editor = null; }
+    if (!automatic) { this.clearPasswords(); this.editor = null; this.editorOrigin = null; }
     this.loading = true; this.sync();
     try {
       const response = await requestManaged({ action: 'status' }, this.options.request);
@@ -93,31 +94,45 @@ export class ManagedProtectionUi {
   }
   private open(kind: EditorKind, root?: ServiceRoot): void {
     if (!this.available || this.stale || this.options.isBlocked()) return;
+    this.editorOrigin = this.activeFocus();
     this.clearPasswords(); this.editor = { kind, root }; this.render();
     const focus = this.container.querySelector<HTMLInputElement>('#managed-editor input:not([type=checkbox])'); focus?.focus({ preventScroll: true });
   }
-  private close(): void { this.clearPasswords(); this.editor = null; this.render(); this.element('managed-add').focus({ preventScroll: true }); this.schedulePoll(); }
-  private activeFocus(): { id: string; action: string } | null {
+  private close(): void {
+    const focus = this.editorOrigin; this.editorOrigin = null;
+    this.clearPasswords(); this.editor = null; this.render();
+    if (focus) this.restoreFocus(focus); else this.element('managed-add').focus({ preventScroll: true });
+    this.schedulePoll();
+  }
+  private activeFocus(): { id: string | null; action: string } | null {
     const active = document.activeElement as HTMLElement | null; const row = active?.closest<HTMLElement>('.managed-root');
-    const id = row && this.rowIds.get(row); return id ? { id, action: active?.dataset.managedAction ?? '' } : null;
+    const action = active?.dataset.managedAction ?? active?.dataset.focusAction;
+    if (!action) return null;
+    return { id: row ? this.rowIds.get(row) ?? null : null, action };
   }
   private restoreFocus(focus: ReturnType<ManagedProtectionUi['activeFocus']>): void {
     if (!focus) return;
+    if (focus.id === null) {
+      const target = this.container.querySelector<HTMLButtonElement>(`[data-managed-action="${focus.action}"], [data-focus-action="${focus.action}"]`);
+      (target && !target.disabled ? target : this.element('managed-title')).focus({ preventScroll: true });
+      return;
+    }
     const row = Array.from(this.container.querySelectorAll<HTMLElement>('.managed-root')).find(row => this.rowIds.get(row) === focus.id);
     const button = row?.querySelector<HTMLButtonElement>(`[data-managed-action="${focus.action}"]`);
     (button && !button.disabled ? button : this.element('managed-title')).focus({ preventScroll: true });
   }
   private async execute(command: ManagedCommand, success: MessageKey, root?: ServiceRoot): Promise<void> {
     if (this.options.isBlocked() || !this.available || this.stale) { clearManagedCommand(command); return; }
+    const focus = this.editorOrigin ?? this.activeFocus(); this.editorOrigin = null;
     this.clearPasswords(); this.editor = null;
-    const focus = this.activeFocus();
     try { await this.options.run(async () => {
       let changed = false;
       try {
         const response = await requestManaged(command, this.options.request); this.transport = response.transport; changed = true;
-        this.feedback = { key: success }; if (root) this.rowFeedback.set(root.id, { key: success });
+        this.feedback = root && command.action !== 'remove' ? null : { key: success };
+        if (root) this.rowFeedback.set(root.id, { key: success });
       } catch (error) {
-        const feedback = { code: failureCode(error), error: true }; this.feedback = feedback; if (root) this.rowFeedback.set(root.id, feedback);
+        const feedback = { code: failureCode(error), error: true }; this.feedback = root ? null : feedback; if (root) this.rowFeedback.set(root.id, feedback);
       }
       // 变更失败也读取服务实际状态；不能用刷新错误覆盖原操作错误。
       try {
@@ -137,7 +152,7 @@ export class ManagedProtectionUi {
     this.container.className = 'records managed-protection';
     const header = document.createElement('div'); header.className = 'records-heading';
     const heading = document.createElement('h2'); heading.id = 'managed-title'; heading.tabIndex = -1; heading.textContent = t('managedTitle');
-    const refresh = this.button('refreshServiceStatus', () => { void this.refresh(); }); refresh.id = 'managed-refresh'; header.append(heading, refresh); this.container.append(header);
+    const refresh = this.button('refreshServiceStatus', () => { void this.refresh(); }); refresh.id = 'managed-refresh'; refresh.dataset.focusAction = 'refresh'; header.append(heading, refresh); this.container.append(header);
     const status = this.paragraph(this.options.isDesktop() ? !this.available ? t(this.snapshot ? 'managedServiceLost' : 'managedServiceUnavailable') : t(this.transport?.healthy ? 'managedServiceConnected' : 'managedServiceDegraded') : t('managedServicePreview'), 'managed-service-status');
     status.id = 'managed-service-status'; status.setAttribute('role', 'status'); this.container.append(status);
     if (this.transport?.last_tick_error) this.container.append(this.paragraph(errorText(this.transport.last_tick_error), 'managed-service-error'));
@@ -179,7 +194,7 @@ export class ManagedProtectionUi {
     if (root.last_error) state.append(this.paragraph(errorText(root.last_error), 'managed-service-error'));
     const actions = document.createElement('div'); actions.className = 'managed-root-actions';
     const append = (key: MessageKey, action: string, callback: () => void) => { const button = this.button(key, callback); button.dataset.managedAction = action; button.setAttribute('aria-label', `${t(key)}: ${root.name}${root.note ? ` · ${root.note}` : ''}`); actions.append(button); };
-    if (root.password_required && !root.restoring) append('managedUnlock', 'unlock', () => this.open('unlock', root));
+    if (root.password_required && root.unlocked_until === null && !root.restoring) append('managedUnlock', 'unlock', () => this.open('unlock', root));
     if (root.unlocked_until !== null && !root.restoring) append('managedRelock', 'relock', () => { void this.execute({ action: 'relock', id: root.id }, 'managedRelocked', root); });
     if (!root.restoring) {
       append('managedPasswordSettings', 'password', () => this.open('password', root));

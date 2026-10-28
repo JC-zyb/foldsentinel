@@ -2,13 +2,13 @@
 
 ## Windows 安装与便携版
 
-Windows 10/11 x64 需要 WebView2 Runtime。v0.6 的安装包名为 `FoldSentinel_0.6.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。v0.6 当前为本地开发版本，是否已发布及可下载附件以实际 Release 为准。
+Windows 10/11 x64 需要 WebView2 Runtime。v0.7.0 预览版的安装包名为 `FoldSentinel_0.7.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包 `FoldSentinel_0.7.0_windows-x64_portable.zip` 解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口，独立服务程序和管理脚本供明确选择安装服务时使用。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。下载附件及中文说明见 [v0.7.0 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.7.0)。
 
 升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性、权限及最外层索引）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
 
 语言和最多 200 项任务描述保存在应用 WebView2 的 localStorage，键为 `foldsentinel.language` 与 `foldsentinel.history.v1`；用户数据目录由 WebView2/Tauri 管理。历史包含本机路径，不含密码或密钥。等待 / 运行记录在重启后显示为中断，重新输入密码后可重试。应用中的“清空历史”只清除终态任务描述，保留等待和运行任务；不会删除源数据、加密包、属性恢复记录或中断任务临时数据。
 
-v0.5 保持上述标识、路径、键及记录结构。预览不写入历史、用户目录或导出诊断；重启、关闭预览、切换操作或运行新任务后须重新验证。单文件包格式没有原文件名，不会从包名称猜测原名。超过展示上限时仍完整验证整包，清单仅展示前 1,000 项和 256 KiB 名称。
+自 v0.5 起加入的预览保持上述标识、路径、键及任务记录结构。预览不写入历史、用户目录或导出诊断；重启、关闭预览、切换操作或运行新任务后须重新验证。单文件包格式没有原文件名，不会从包名称猜测原名。超过展示上限时仍完整验证整包，清单仅展示前 1,000 项和 256 KiB 名称。
 
 隐藏策略会写入 Windows Hidden + System 属性。资源管理器默认隐藏受保护的操作系统文件，因此开启“显示隐藏的项目”时通常仍不会列出这些项目；关闭该保护选项或使用其他文件管理器后仍可见。需要内容机密性时请使用加密包，属性操作不提供安全边界。
 
@@ -31,8 +31,8 @@ v0.5 保持上述标识、路径、键及记录结构。预览不写入历史、
 同一 Release 下载安装包或便携 ZIP 和 `SHA256SUMS.txt`，在 PowerShell 中执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.6.0_x64-setup.exe
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.6.0_windows-x64_portable.zip
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.7.0_x64-setup.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.7.0_windows-x64_portable.zip
 ```
 
 逐项比对名称与哈希，须与发布页及校验文件一致。SHA-256 用于检测下载内容变化，不等价于代码签名或独立安全审计。当前产物未签名。
@@ -41,4 +41,4 @@ Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.6.0_windows-x64_por
 
 使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.4 基线升级和默认卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。安装验证检查真实 exe 启动及创建 WebView2 子进程和用户目录哨兵保留，不能替代交互验证、真实偏好兼容或无 WebView2 的干净虚拟机。
 
-本地执行 `./scripts/package.ps1` 构建 Rust GUI、CLI、独立服务与NSIS，再将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包，产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包不会安装服务。脚本自动检查版本、ZIP内容与两个SHA-256；也可单独运行 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.6.0`。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。
+本地执行 `./scripts/package.ps1` 构建 Rust GUI、CLI、独立服务与NSIS，再将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包，产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包不会安装服务。脚本自动检查版本、ZIP内容与两个SHA-256；也可单独运行 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.7.0`。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。

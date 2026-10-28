@@ -7,6 +7,7 @@ pub mod vault;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -156,6 +157,13 @@ pub struct StateStore {
     _lock: File,
     #[cfg(test)]
     local_check: Option<LocalRangeCheck>,
+}
+
+struct ReviewedRestoreEntry {
+    key: String,
+    object: acl::Object,
+    current_acl: String,
+    current_attributes: u32,
 }
 
 #[cfg(test)]
@@ -513,6 +521,133 @@ impl StateStore {
                 self.data = before_cleanup;
                 return Err(error);
             }
+        }
+        Ok(report)
+    }
+
+    /// 只读核查完整锁定子树；返回的摘要不包含路径、ACL 或文件内容。
+    pub fn review_acl_restore(&self, input: &Path) -> Result<String> {
+        let planned = self.reviewed_restore_plan(input)?;
+        self.acl_restore_token(&planned)
+    }
+
+    fn reviewed_restore_plan(&self, input: &Path) -> Result<Vec<ReviewedRestoreEntry>> {
+        let root = lookup_root(input)?;
+        self.ensure_local_available(std::slice::from_ref(&root))?;
+        let root_key = path_key(&root);
+        self.reject_locked_ancestor(&root_key)?;
+        if !self.data.roots.contains(&root_key) {
+            bail!(vault::ErrorCode::ProtectionRecordChanged);
+        }
+        let mut matching: Vec<_> = self
+            .data
+            .entries
+            .keys()
+            .filter(|key| is_same_or_child(key, &root_key))
+            .cloned()
+            .collect();
+        matching.sort_by_key(|key| Path::new(key).components().count());
+        if matching.is_empty()
+            || matching
+                .iter()
+                .any(|key| self.data.entries[key].lock.is_none())
+        {
+            bail!(vault::ErrorCode::ProtectionInput);
+        }
+        verify_lock_parents(matching.iter().map(|key| &self.data.entries[key]))?;
+        let mut planned = Vec::with_capacity(matching.len());
+        for key in matching {
+            let entry = &self.data.entries[&key];
+            let path = Path::new(&entry.path);
+            vault::reject_link(path)?;
+            let object = acl::Object::open(path)?;
+            let current_acl = object.review_restore(entry.lock.as_ref().expect("checked lock"))?;
+            let current_attributes = object.attributes()?;
+            planned.push(ReviewedRestoreEntry {
+                key,
+                object,
+                current_acl,
+                current_attributes,
+            });
+        }
+        Ok(planned)
+    }
+
+    fn acl_restore_token(&self, planned: &[ReviewedRestoreEntry]) -> Result<String> {
+        let mut digest = Sha256::new();
+        digest.update(b"FoldSentinel reviewed ACL restore v1\0");
+        let state = serde_json::to_vec(&self.data)?;
+        digest.update((state.len() as u64).to_le_bytes());
+        digest.update(state);
+        for entry in planned {
+            for text in [&entry.key, &entry.current_acl] {
+                digest.update((text.len() as u64).to_le_bytes());
+                digest.update(text.as_bytes());
+            }
+            digest.update(entry.current_attributes.to_le_bytes());
+        }
+        Ok(format!("{:x}", digest.finalize()))
+    }
+
+    /// 仅用于界面明确确认撤销保护后权限变更的独立恢复入口。
+    pub fn unprotect_after_acl_review(
+        &mut self,
+        input: &Path,
+        token: &str,
+    ) -> Result<OperationReport> {
+        if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!(vault::ErrorCode::ProtectionRecordChanged);
+        }
+        let planned = self.reviewed_restore_plan(input)?;
+        if self.acl_restore_token(&planned)? != token {
+            bail!(vault::ErrorCode::ProtectionRecordChanged);
+        }
+        // 核查和提交之间的变化使确认失效；所有对象在首次写入前已核对并持有句柄。
+        verify_lock_parents(planned.iter().map(|item| &self.data.entries[&item.key]))?;
+        for item in &planned {
+            let lock = self.data.entries[&item.key]
+                .lock
+                .as_ref()
+                .expect("checked lock");
+            if item.object.review_restore(lock)? != item.current_acl
+                || item.object.attributes()? != item.current_attributes
+            {
+                bail!(vault::ErrorCode::ProtectionRecordChanged);
+            }
+        }
+        let mut report = OperationReport::default();
+        for item in &planned {
+            let entry = &self.data.entries[&item.key];
+            let lock = entry.lock.as_ref().expect("checked lock");
+            if item.object.identity()? != lock.identity {
+                bail!(vault::ErrorCode::ProtectionConflict);
+            }
+            let mut changed = !acl::equivalent(&item.object.read()?, &lock.original);
+            if changed {
+                item.object.write(&lock.original)?;
+            }
+            let current = item.object.attributes()?;
+            let restored = (current & !entry.managed_attributes)
+                | (entry.original_attributes & entry.managed_attributes);
+            if current != restored {
+                item.object.write_attributes(restored)?;
+                changed = true;
+            }
+            if changed {
+                report.changed += 1;
+            }
+        }
+        let previous = self.data.clone();
+        for item in planned {
+            self.data.entries.remove(&item.key);
+        }
+        self.data.roots = root_counts(&self.data.entries).into_keys().collect();
+        self.data
+            .root_notes
+            .retain(|root, _| self.data.roots.contains(root));
+        if let Err(error) = self.save() {
+            self.data = previous;
+            return Err(error);
         }
         Ok(report)
     }
@@ -1742,6 +1877,113 @@ mod tests {
         fs::remove_file(&source).unwrap();
         assert!(store.unprotect(&source).is_err());
         assert_eq!(store.entries().count(), 1);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn reviewed_acl_restore_recovers_explorer_grant_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("folder");
+        fs::create_dir_all(root.join("child")).unwrap();
+        let file = root.join("child/file.txt");
+        fs::write(&file, b"unchanged content").unwrap();
+        let originals: Vec<_> = targets(&root)
+            .unwrap()
+            .into_iter()
+            .map(|path| {
+                let original = acl::Object::open(&path).unwrap().read().unwrap();
+                (path, original)
+            })
+            .collect();
+        let state = dir.path().join("state.json");
+        let mut store = StateStore::load_from(state.clone()).unwrap();
+        store.protect(&root, ProtectionMode::Locked).unwrap();
+        let object = acl::Object::open(&root).unwrap();
+        let record = store.data.entries[&path_key(&fs::canonicalize(&root).unwrap())]
+            .lock
+            .clone()
+            .unwrap();
+        let altered = format!(
+            "{}(A;OICI;FA;;;{})",
+            record.locked,
+            acl::current_sid().unwrap()
+        );
+        object.write(&altered).unwrap();
+        let saved = fs::read(&state).unwrap();
+        assert!(store.unprotect(&root).is_err());
+        let token = store.review_acl_restore(&root).unwrap();
+        assert_eq!(token.len(), 64);
+        assert_eq!(fs::read(&state).unwrap(), saved);
+        assert!(acl::equivalent(&object.read().unwrap(), &altered));
+        drop(store);
+        let mut store = StateStore::load_from(state).unwrap();
+        store.unprotect_after_acl_review(&root, &token).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"unchanged content");
+        assert!(store.entries().next().is_none());
+        for (path, original) in originals {
+            assert!(acl::equivalent(
+                &acl::Object::open(&path).unwrap().read().unwrap(),
+                &original
+            ));
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn reviewed_acl_restore_rejects_stale_confirmation_without_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("folder");
+        fs::create_dir(&root).unwrap();
+        let file = root.join("file.txt");
+        fs::write(&file, b"keep").unwrap();
+        let state = dir.path().join("state.json");
+        let mut store = StateStore::load_from(state.clone()).unwrap();
+        store.protect(&root, ProtectionMode::Locked).unwrap();
+        let token = store.review_acl_restore(&root).unwrap();
+        let object = acl::Object::open(&root).unwrap();
+        let before = object.read().unwrap();
+        let altered = format!("{before}(A;OICI;FA;;;{})", acl::current_sid().unwrap());
+        object.write(&altered).unwrap();
+        let saved = fs::read(&state).unwrap();
+        assert!(store.unprotect_after_acl_review(&root, &token).is_err());
+        assert_eq!(fs::read(&state).unwrap(), saved);
+        assert!(acl::equivalent(&object.read().unwrap(), &altered));
+        assert!(fs::read(&file).is_err());
+        let token = store.review_acl_restore(&root).unwrap();
+        store.unprotect_after_acl_review(&root, &token).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"keep");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn reviewed_acl_restore_refuses_parent_and_identity_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        let file = parent.join("file.txt");
+        fs::write(&file, b"keep").unwrap();
+        let state = dir.path().join("state.json");
+        let mut store = StateStore::load_from(state.clone()).unwrap();
+        store.protect(&file, ProtectionMode::Locked).unwrap();
+        let token = store.review_acl_restore(&file).unwrap();
+        let parent_object = acl::Object::open(&parent).unwrap();
+        let parent_record = parent_object.prepare().unwrap();
+        parent_object.write(&parent_record.locked).unwrap();
+        let saved = fs::read(&state).unwrap();
+        assert!(store.review_acl_restore(&file).is_err());
+        assert!(store.unprotect_after_acl_review(&file, &token).is_err());
+        parent_object.write(&parent_record.original).unwrap();
+        let record = store.entries().next().unwrap().lock.clone().unwrap();
+        acl::Object::open(&file)
+            .unwrap()
+            .write(&record.original)
+            .unwrap();
+        fs::remove_file(&file).unwrap();
+        fs::write(&file, b"replacement").unwrap();
+        assert!(store.review_acl_restore(&file).is_err());
+        assert!(store.unprotect_after_acl_review(&file, &token).is_err());
+        assert_eq!(fs::read(&state).unwrap(), saved);
+        assert_eq!(fs::read(&file).unwrap(), b"replacement");
     }
 
     #[test]

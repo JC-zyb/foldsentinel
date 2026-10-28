@@ -146,6 +146,27 @@ pub fn restore(store: &mut StateStore, id: &str) -> Result<OperationReport> {
     store.unprotect(Path::new(&path))
 }
 
+#[derive(Serialize)]
+pub struct AclRestoreReview {
+    token: String,
+}
+
+pub fn review_restore(store: &StateStore, id: &str) -> Result<AclRestoreReview> {
+    let path = resolve_root(store, id)?;
+    Ok(AclRestoreReview {
+        token: store.review_acl_restore(Path::new(&path))?,
+    })
+}
+
+pub fn restore_after_review(
+    store: &mut StateStore,
+    id: &str,
+    token: &str,
+) -> Result<OperationReport> {
+    let path = resolve_root(store, id)?;
+    store.unprotect_after_acl_review(Path::new(&path), token)
+}
+
 pub fn apply(store: &mut StateStore, id: &str, mode: ProtectionMode) -> Result<OperationReport> {
     let path = resolve_root(store, id)?;
     store.protect(Path::new(&path), mode)
@@ -168,6 +189,26 @@ mod tests {
     use super::*;
     use foldsentinel::ProtectionMode;
     use std::fs;
+
+    #[test]
+    fn acl_restore_review_returns_only_token_and_resolves_existing_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("private-content.txt");
+        fs::write(&file, b"keep").unwrap();
+        let mut store = StateStore::load_from(temp.path().join("state.json")).unwrap();
+        store.protect(&file, ProtectionMode::Locked).unwrap();
+        let id = snapshot(&store, 0, "").roots[0].id.clone();
+        let review = review_restore(&store, &id).unwrap();
+        let value = serde_json::to_value(&review).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(value["token"].as_str().unwrap().len(), 64);
+        assert!(!value.to_string().contains("private-content"));
+        assert!(review_restore(&store, "missing").is_err());
+        assert!(restore_after_review(&mut store, "missing", &review.token).is_err());
+        restore_after_review(&mut store, &id, &review.token).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"keep");
+        assert_eq!(snapshot(&store, 0, "").total, 0);
+    }
 
     #[test]
     fn add_preview_checks_all_records_and_this_batch_without_path_disclosure() {

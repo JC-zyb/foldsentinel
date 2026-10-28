@@ -292,6 +292,29 @@ async fn set_protection_mode(id: String, mode: ProtectionMode) -> Result<Operati
 }
 
 #[tauri::command]
+async fn review_restore_attributes(id: String) -> Result<attributes::AclRestoreReview, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::review_restore(&store, &id).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn restore_attributes_after_review(
+    id: String,
+    token: String,
+) -> Result<OperationReport, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = StateStore::load_default().map_err(UiError::vault)?;
+        attributes::restore_after_review(&mut store, &id, &token).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
 async fn managed_protection(
     command: foldsentinel::service::Command,
 ) -> Result<foldsentinel::service::Response, UiError> {
@@ -353,7 +376,9 @@ fn main() {
             verify_protection,
             set_protection_note,
             set_protection_mode,
-            restore_attributes
+            restore_attributes,
+            review_restore_attributes,
+            restore_attributes_after_review
         ])
         .run(tauri::generate_context!())
         .expect("FoldSentinel 桌面程序启动失败");

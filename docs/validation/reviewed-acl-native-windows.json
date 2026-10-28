@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "version": "0.6.0",
+  "tested_on": "2026-10-28",
+  "platform": "Windows x64, NTFS, current account",
+  "binary": "target/release/FoldSentinel.exe",
+  "binary_sha256": "3DD8E52F2F3BB8C8FA9D01729E485B98DA8BE9ADBF50C65204AE1E9777D0635D",
+  "passed": true,
+  "ui_flow": "previous_standalone_review_action",
+  "scope_note": "This report validates the previous UI with a separate review action. It does not validate the current single '解除保护' entry automatically opening the confirmation panel.",
+  "isolation": {
+    "appdata": "isolated workspace fixture",
+    "webview2": "isolated workspace fixture",
+    "system_service_changes": false
+  },
+  "checks": [
+    {"name": "strict_restore_refuses_later_acl_grant", "passed": true},
+    {"name": "review_is_read_only", "passed": true},
+    {"name": "cancel_keeps_permissions_and_state", "passed": true},
+    {"name": "confirmation_controls_scroll_into_view", "passed": true},
+    {"name": "explicit_confirmation_restores_both_original_dacls", "passed": true},
+    {"name": "both_object_identities_and_attributes_preserved", "passed": true},
+    {"name": "file_content_sha256_preserved", "passed": true, "sha256": "82FE74C2B9F931E452BB607955C3C8FE4F74599020F81747714100A1AF3FC852"},
+    {"name": "ui_and_persisted_recovery_entries_empty_after_success", "passed": true}
+  ],
+  "limitations": [
+    "The Explorer-style full-control ACE was introduced programmatically on an owned fixture; this test did not click the Windows Explorer permission prompt.",
+    "This report covers ordinary local protection, not SYSTEM-service password access.",
+    "No second account, clean virtual machine, native DPI matrix, installer upgrade, or remote CI validation in this run."
+  ]
+}
