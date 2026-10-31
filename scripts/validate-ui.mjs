@@ -23,7 +23,7 @@ const checks = [];
 const errors = [];
 let failed = false;
 try {
-  for (const [width, scale] of [[1080, 1], [720, 1], [720, 1.25], [720, 1.5], [576, 1.25], [480, 1.5]]) {
+  for (const [width, scale] of [[1440, 1], [1080, 1], [961, 1], [960, 1], [900, 1], [720, 1], [720, 1.25], [720, 1.5], [576, 1.25], [480, 1.5], [375, 1]]) {
     const context = await browser.newContext({ viewport: { width, height: 820 }, deviceScaleFactor: scale, locale: 'en-US' });
     try {
       // 测试不访问外站，也不接入桌面 IPC 或模拟文件操作成功。
@@ -32,6 +32,16 @@ try {
       page.on('pageerror', error => errors.push(error.message));
       // Vite 的 HMR 长连接不作为界面就绪条件；等待实际控件可操作。
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      if (width === 1080) {
+        for (const language of ['zh-CN', 'en']) {
+          await page.locator('#language').selectOption(language);
+          const add = await page.locator('#add-to-queue').boundingBox();
+          assert.ok(add && add.y >= 0 && add.y + add.height <= 820, '默认窗口中加入队列必须在首屏完整可见');
+          assert.equal(await page.getByRole('group', { name: language === 'zh-CN' ? '加密包操作' : 'Package operation' }).count(), 1);
+          await page.screenshot({ path: join(screenshotRoot, `ui-${width}-initial-${language}.png`) });
+          checks.push({ css_width: width, language, initial_add_action_above_fold: true, named_operation_group: true });
+        }
+      }
       await page.locator('#language').selectOption('en');
       assert.equal(await page.locator('.queue-overview').isVisible(), false, '空队列不应在主要操作前重复显示摘要');
       await page.locator('#manual-sources > summary').click();
@@ -48,6 +58,7 @@ try {
           assert.equal(await page.locator('#password').inputValue(), 'public-layout-test-only');
           if (operation === 'encrypt') assert.equal(await page.locator('#confirm-password').inputValue(), 'public-layout-test-only');
           assert.equal(await page.locator('#source-list > li').count(), 2);
+          await page.locator('#source-list > li button').last().scrollIntoViewIfNeeded();
           const lastRemove = await page.locator('#source-list > li button').last().boundingBox();
           const sourceList = await page.locator('#source-list').boundingBox();
           assert.ok(lastRemove && sourceList && lastRemove.y + lastRemove.height <= sourceList.y + sourceList.height + 1,
@@ -67,6 +78,7 @@ try {
         }
       }
       await page.locator('#nav-attributes').click();
+      assert.equal(await page.locator('#page-title').evaluate(element => element === document.activeElement), true, '导航后聚焦新页面标题');
       for (const language of ['zh-CN', 'en']) {
         await page.locator('#language').selectOption(language);
         await page.evaluate(() => scrollTo(0, 0));
@@ -189,6 +201,16 @@ try {
         }));
         assert.ok(layout.documentWidth <= layout.width + 1, JSON.stringify({ width, scale, language, layout }));
         assert.deepEqual(layout.outside, [], JSON.stringify({ width, scale, language, layout }));
+        const clippedModes = await page.locator('#root-list .root-policy select').evaluateAll(selects => {
+          const context = document.createElement('canvas').getContext('2d');
+          return selects.filter(select => {
+            const style = getComputedStyle(select);
+            context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const textWidth = context.measureText(select.selectedOptions[0]?.textContent ?? '').width;
+            return textWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 24 > select.clientWidth;
+          }).map(select => select.selectedOptions[0]?.textContent);
+        });
+        assert.deepEqual(clippedModes, [], `登记方式选中值必须完整可读：${JSON.stringify({ width, language, clippedModes })}`);
         const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
         checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, one_restore_entry_point_with_confirmation_on_conflict: true, screenshot });
@@ -221,6 +243,49 @@ try {
     checks.push({ operation: 'queue-overview', completed_only_top_summary_hidden: true, empty_controls_hidden: true, queue_summary_retained: true });
   } finally {
     await queuedContext.close();
+  }
+  const managedContext = await browser.newContext({ viewport: { width: 1080, height: 820 }, locale: 'zh-CN' });
+  try {
+    await managedContext.route('**/*', route => new URL(route.request().url()).origin === url.origin ? route.continue() : route.abort());
+    const page = await managedContext.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.locator('#nav-attributes').click();
+    // 合成数据仅验证真实服务 UI 组件的重绘、焦点与滚动；禁止 IPC 和文件操作，不模拟成功结果。
+    await page.evaluate(async () => {
+      const { ManagedProtectionUi } = await import('/ui/managed.ts');
+      const container = document.createElement('section'); container.id = 'managed-ui-regression';
+      document.querySelector('main').append(container);
+      const ui = new ManagedProtectionUi(container, {
+        request: () => { throw new Error('UI regression must not call IPC'); },
+        run: () => { throw new Error('UI regression must not run file operations'); },
+        isDesktop: () => false, isBlocked: () => false, choose: async () => null
+      });
+      window.managedUiRegression = ui;
+      ui.available = true;
+      ui.snapshot = { registered: 20, roots: Array.from({ length: 20 }, (_, index) => ({
+        id: String(index), name: `布局项目 ${index}`, note: '', mode: 'locked', monitoring: false,
+        unlocked_until: null, restoring: false, password_required: true, last_error: null
+      })) };
+      ui.render();
+    });
+    const help = page.locator('#managed-ui-regression .managed-service-help');
+    await help.locator('summary').click();
+    assert.equal(await help.getAttribute('open'), '');
+    await page.evaluate(() => window.managedUiRegression.render());
+    assert.equal(await help.getAttribute('open'), '', '服务说明重绘后保持展开');
+    assert.equal(await help.locator('summary').evaluate(summary => document.activeElement === summary), true, '服务说明重绘后保留阅读焦点');
+    await help.locator('summary').click();
+    await page.evaluate(() => window.managedUiRegression.render());
+    assert.equal(await help.getAttribute('open'), null, '服务说明重绘后保持收起');
+    await page.locator('#managed-ui-regression [data-managed-action="unlock"]').last().click();
+    const firstInput = page.locator('#managed-ui-regression #managed-editor input:not([type=checkbox])').first();
+    assert.equal(await firstInput.evaluate(input => document.activeElement === input), true, '打开编辑器后聚焦首个输入');
+    const inputBox = await firstInput.boundingBox();
+    assert.ok(inputBox && inputBox.y >= 0 && inputBox.y + inputBox.height <= 820, `长列表编辑器输入须在视口内：${JSON.stringify(inputBox)}`);
+    checks.push({ operation: 'managed-component', synthetic_ui_only: true, help_expansion_preserved: true, help_summary_focus_preserved: true, help_collapse_preserved: true, long_list_editor_input_visible: true });
+  } finally {
+    await managedContext.close();
   }
   assert.deepEqual(errors, []);
 } catch (error) {

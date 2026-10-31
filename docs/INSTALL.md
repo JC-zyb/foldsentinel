@@ -2,9 +2,9 @@
 
 ## Windows 安装与便携版
 
-Windows 10/11 x64 需要 WebView2 Runtime。v0.7.0 预览版的安装包名为 `FoldSentinel_0.7.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包 `FoldSentinel_0.7.0_windows-x64_portable.zip` 解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口，独立服务程序和管理脚本供明确选择安装服务时使用。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。下载附件及中文说明见 [v0.7.0 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.7.0)。
+Windows 10/11 x64 需要 WebView2 Runtime。当前版本为 v0.8.0 预览版，下载、对应提交的 CI 与验证边界见 [v0.8.0 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.8.0)。安装包名为 `FoldSentinel_0.8.0_x64-setup.exe`，按当前用户安装，可选择简体中文或 English；安装器语言与应用右上角语言独立。便携包 `FoldSentinel_0.8.0_windows-x64_portable.zip` 解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口，独立服务程序和管理脚本供明确选择安装服务时使用。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。
 
-升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性、权限及最外层索引）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
+升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性、权限及最外层索引）、`vault-inventory.json`（加密资产和恢复位置）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
 
 语言和最多 200 项任务描述保存在应用 WebView2 的 localStorage，键为 `foldsentinel.language` 与 `foldsentinel.history.v1`；用户数据目录由 WebView2/Tauri 管理。历史包含本机路径，不含密码或密钥。等待 / 运行记录在重启后显示为中断，重新输入密码后可重试。应用中的“清空历史”只清除终态任务描述，保留等待和运行任务；不会删除源数据、加密包、属性恢复记录或中断任务临时数据。
 
@@ -20,25 +20,44 @@ Windows 10/11 x64 需要 WebView2 Runtime。v0.7.0 预览版的安装包名为 `
 
 应用中的恢复备份导出完整本地记录与文件身份，AES-GCM认证加密后由原账户DPAPI保护密钥；导入需本机同一账户及原密钥、空的本地登记和匹配的文件身份/权限，不覆盖现存状态。该入口只备份本地 `state.json`，不包含可选SYSTEM服务的私有记录。
 
-可选服务使用独立 `managed-v1` 状态，按经过管道令牌认证的账户SID存入ProgramData私有目录。GUI/CLI不会自动安装服务，也不自动导入用户可修改的旧ACL。安装、停止、升级和卸载须遵守[服务生命周期](SERVICE.md)：所有账户先解除服务受管项目，停止并核对重锁，再检查状态为空后卸载，保留恢复资料。普通GUI安装包不会自动安装、停止或删除独立服务；卸载GUI也不代表服务已卸载。
+可选服务使用独立 `managed-v1` 状态，按经过管道令牌认证的账户SID存入ProgramData私有目录。GUI/CLI不会自动安装服务，也不自动导入用户可修改的旧ACL。安装、停止、升级和卸载须遵守[服务生命周期](SERVICE.md)。v0.8.0 正常卸载器发现该服务时，另行请求管理员授权，先核验全账户均无受管项目，停止服务后再次空审计，才删除固定服务登记和程序；服务仍有受管项目、退出错误或审计不明时拒绝正常卸载。强制卸载会删除服务，但不解密或恢复文件权限。
 
 异常退出可能留下已认证的恢复明文。启动提示引导查看中断记录：正在运行的任务不能清理；可清理记录展示源、输出和临时位置；损坏或位置异常的记录保留并提示人工核查，不影响其他记录列出。只通过中断任务清理入口或 CLI `vault cleanup <ID>` 清理所属临时数据；程序检查锁与所有者，不会删除最终输出。清理失败会保留记录，解除占用或恢复目标父目录后重试。不要手动删除仍在运行的任务目录。没有断点续传，也不承诺断电事务或安全擦除。
 
-错误详情及主动导出的 JSON 采用字段白名单，不包含密码、密钥或本机完整路径；本机任务历史和中断列表仍需显示路径来定位文件。导出仅创建新的 `.json` 文件，不覆盖已有报告。默认卸载不等于清理所有用户数据：卸载器若提供“删除应用数据”选项，应先评估备份，特别是原始属性与中断恢复记录。
+错误详情及主动导出的 JSON 采用字段白名单，不包含密码、密钥或本机完整路径；本机任务历史和中断列表仍需显示路径来定位文件。导出仅创建新的 `.json` 文件，不覆盖已有报告。
+
+## 卸载前检查与强制卸载
+
+安装版由 NSIS 登记 Windows“已安装的应用”卸载入口，安装目录包含 `uninstall.exe`。卸载前先结束队列、关闭主窗口，在本软件中解密仍需保留的加密项目、解除全部本地保护，并由各登记账户解除服务受管项目。临时解锁或停止持续防护不等于解除保护。便携版没有 Windows 安装登记；删除便携程序目录前也应先完成这些恢复步骤。
+
+卸载检查采用“本软件管理项目＋旧包扫描”范围。独立的 `vault-inventory.json` 不随界面历史清空，记录本软件创建、成功验证或发现的 v1/v2 包及恢复位置；位于任意磁盘的已登记项目都逐项核对。旧包扫描通过 Windows Known Folder 获取当前账户实际的桌面、文档、下载目录（含 OneDrive 等重定向位置），并检查 `%APPDATA%\FoldSentinel` 和 `%LOCALAPPDATA%\io.github.jc-zyb.foldsentinel`，以内容头识别，不依赖 `.fse` 扩展名。它不逐文件扫描其他 Windows 账户或任意磁盘；自定旧包目录可先运行以下 CLI 命令，发现的包会登记，扫描不完整明确报错：
+
+```powershell
+.\foldsentinel-cli.exe vault discover D:\OldVaults E:\Archive
+.\foldsentinel-cli.exe vault inventory
+```
+
+扫描权限错误、离线或未知位置、损坏索引、未处理恢复任务都不能视为空状态。已恢复资产须有本软件完成解密提交的记录，且输出根对象身份仍匹配；仅在同一路径放一个同名文件或目录不能视为已恢复。身份核对允许内容正常编辑，不验证内容哈希、目录内部内容是否完整，也不能代替用户备份。
+
+正常卸载只有在已登记资产完成恢复且输出根对象仍可确认、本地保护记录为空、恢复任务及其目录为空、服务全账户审计为空时继续。卸载期间阻止 GUI/CLI 启动新的文件操作；卸载会话绑定实际卸载进程，异常退出后可重试。预检即拒绝应用状态目录的未知条目、非空恢复目录或重解析点，收尾再次核对。服务清理需要管理员授权，并核对固定安装路径、退出码、全账户状态与实际删除结果；停止后的二次审计失败时尝试重新启动原先运行中的服务。
+
+程序文件、快捷方式和卸载登记由 NSIS 移除；调用应用数据收尾前再次核对主程序、卸载器、产品快捷方式、卸载登记及自启动项确实移除，已知内容残留或无法核验时返回失败并保留恢复资料。正常收尾清理已核实的应用状态、固定产品目录下的 `EBWebView` 用户数据及空目录，因此会删除本应用偏好和任务历史；遇到未知根条目、重解析点、锁定文件或 IO 错误时保留未清理内容并明确报错，不能当作完整卸载成功。不会递归删除用户源文件或加密包；ProgramData 的服务恢复资料保留。
+
+如正常条件未满足，交互式卸载器在同一窗口显示阻止原因及中英强制卸载免责声明，两次确认均默认“否”。确认后删除应用与独立服务（服务仍需管理员 UAC 授权），保留全部应用数据、ProgramData 资料、资产索引、本地保护状态、中断恢复记录、加密包和用户文件。受保护文件可能继续不可访问，用户须重新安装相容版本，使用原密码和恢复资料处理；资料丢失可能导致无法恢复。服务删除取消或失败时停止卸载。`/S` 静默、`/P` 被动模式不提供强制确认，公开的 `/UPDATE` 参数也不能绕过检查。此机制避免误删恢复资料，不是防止同账户程序或管理员篡改本地记录的安全边界。
 
 ## 校验下载
 
 同一 Release 下载安装包或便携 ZIP 和 `SHA256SUMS.txt`，在 PowerShell 中执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.7.0_x64-setup.exe
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.7.0_windows-x64_portable.zip
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.8.0_x64-setup.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.8.0_windows-x64_portable.zip
 ```
 
 逐项比对名称与哈希，须与发布页及校验文件一致。SHA-256 用于检测下载内容变化，不等价于代码签名或独立安全审计。当前产物未签名。
 
 ## 可重现的发布流程
 
-使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.4 基线升级和默认卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。安装验证检查真实 exe 启动及创建 WebView2 子进程和用户目录哨兵保留，不能替代交互验证、真实偏好兼容或无 WebView2 的干净虚拟机。
+使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.4 基线升级和卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。`validate-uninstall-hooks.ps1` 使用私有目录和夹具 helper 验证删除前拦截及返回码，`validate-service-uninstall.ps1` 使用函数替身核对服务脚本边界；这些隔离验证不能替代真实 UAC、SCM 删除、交互式强制确认或干净系统验收。
 
-本地执行 `./scripts/package.ps1` 构建 Rust GUI、CLI、独立服务与NSIS，再将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包，产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包不会安装服务。脚本自动检查版本、ZIP内容与两个SHA-256；也可单独运行 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.7.0`。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。
+本地执行 `./scripts/package.ps1` 构建 Rust GUI、CLI、独立服务与NSIS，再将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包，产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包不会安装服务。脚本自动检查版本、ZIP内容与两个SHA-256；也可单独运行 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.8.0`。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。

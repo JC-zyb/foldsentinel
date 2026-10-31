@@ -2,9 +2,9 @@
 
 文件夹哨兵：使用 Rust + Tauri 2 构建的开源 Windows 文件保护工具。支持中英双语、文件 / 文件夹流式密码加密包、串行任务队列、完整验证后的内容预览、历史与重试，以及可恢复的隐藏、NTFS 锁定、只读保护。
 
-## 使用 v0.7.0（预览版）
+## 使用 v0.8.0（预览版）
 
-当前版本为 **v0.7.0 预览版**，提供 NTFS 锁定、权限只读、本地恢复备份及可选 SYSTEM 服务密码访问。Windows x64 安装包、包含 GUI / CLI / 独立服务及管理脚本的便携 ZIP 和 `SHA256SUMS.txt` 见 [v0.7.0 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.7.0)。也可按下文“开发与构建”从源码生成产物；具体验证结果和已知限制以对应发布说明及[验证记录](docs/VALIDATION.md)为准。
+当前版本为 **v0.8.0 预览版**，加入卸载安全检查并优化界面布局，保留 NTFS 锁定、权限只读、本地恢复备份及可选 SYSTEM 服务密码访问。Windows x64 安装包、便携 ZIP 与校验和见 [v0.8.0 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.8.0)；发布说明列出对应提交的 Windows CI 与实际验证边界。也可按下文“开发与构建”从源码生成产物，本轮本机验证和未覆盖范围见[验证记录](docs/VALIDATION.md)。
 
 系统需要 Windows 10/11 x64 与 Microsoft Edge WebView2 Runtime；安装器可按需获取 Runtime，便携版需提前具备 Runtime。当前版本未做代码签名。
 
@@ -36,6 +36,8 @@
 
 独立的 **SYSTEM 服务与密码访问** 入口通过经过Windows令牌鉴权的本机服务登记项目，支持密码验证后临时解锁、立即重锁、密码修改与持续防护开关。临时解锁默认5分钟；关闭主窗口不停止服务，重启服务先处理未完成访问。服务扫描新增项和权限变化存在检测间隔，不能撤销既有句柄。服务状态和本地恢复记录分开，不自动迁移旧ACL；需要先在旧入口解除，再明确登记。服务二进制和安装脚本随便携包提供，**安装前须明确确认；本机已完成真实SYSTEM及SCM生命周期测试，第二账户和整机重启仍待验证**，说明见[持续防护服务](docs/SERVICE.md)。
 
+安装版在 Windows“已安装的应用”中提供卸载入口，安装目录也包含 `uninstall.exe`。正常卸载前须在本软件中恢复全部登记的加密项目、关闭本地及全部账户的服务文件保护，并处理完中断任务。卸载器检查独立资产清单及当前账户桌面、文档、下载和本软件数据目录；发现待恢复加密包、缺失或不可访问的恢复输出、扫描失败时停止。标准目录遵循 Windows 重定向配置，包括 OneDrive；此范围不是所有账户、所有磁盘的全机内容扫描，其他旧包目录可先用 CLI `vault discover` 扫描登记。交互式强制卸载同窗显示中英免责声明并要求二次确认，默认选择“否”；静默或被动模式不允许强制。强制路径移除应用和独立服务，但保留加密包、保护状态和全部恢复资料，文件可能仍受保护，后续需重新安装或使用恢复工具处理。服务删除需要管理员授权，取消或失败会停止卸载。完整操作与数据保留规则见[卸载说明](docs/INSTALL.md#卸载前检查与强制卸载)。
+
 ## 功能与边界
 
 - Argon2id 派生密钥，RustCrypto STREAM BE32 + AES-256-GCM 分块认证加密；随机 salt/nonce 前缀，每块认证整个格式头部及顺序、终块状态。
@@ -60,6 +62,8 @@ cargo run -- unprotect C:\Private\Notes
 cargo run -- vault encrypt C:\Private\Notes C:\Private\Notes.fse
 cargo run -- vault decrypt C:\Private\Notes.fse C:\Private\Notes-restored
 cargo run -- vault verify C:\Private\Notes.fse
+cargo run -- vault discover D:\OldVaults E:\Archive
+cargo run -- vault inventory
 cargo run -- vault interrupted
 cargo run -- vault cleanup <中断任务ID>
 cargo run -- managed status

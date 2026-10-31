@@ -19,35 +19,38 @@ const shield = '<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d=
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <aside class="sidebar">
     <div class="brand"><span class="brand-icon">${shield}</span><div>FoldSentinel<small ${text('brand')}></small></div></div>
-    <p class="nav-label" ${text('local')}></p>
-    <nav><button id="nav-vault" class="nav-item selected" aria-current="page" ${text('vault')}></button><button id="nav-attributes" class="nav-item" ${text('attributes')}></button></nav>
+    <p id="nav-label" class="nav-label" ${text('local')}></p>
+    <nav aria-labelledby="nav-label"><button id="nav-vault" class="nav-item selected" aria-current="page" ${text('vault')}></button><button id="nav-attributes" class="nav-item" ${text('attributes')}></button></nav>
     <div class="sidebar-footer"><span class="local-dot"></span><span ${text('localOnly')}></span><small ${text('license')}></small></div>
   </aside>
-  <main>
-    <header><div><p class="eyebrow" ${text('eyebrow')}></p><h1 id="page-title"></h1><p id="page-description"></p></div><div class="language-control"><label for="language" ${text('language')}></label><select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div></header>
+  <main aria-labelledby="page-title">
+    <header><div><p class="eyebrow" ${text('eyebrow')}></p><h1 id="page-title" tabindex="-1"></h1><p id="page-description"></p></div><div class="language-control"><label for="language" ${text('language')}></label><select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div></header>
+    <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div>
     <section id="vault-panel">
       <div id="recovery-alert" class="notice recovery-alert" role="status" hidden><p id="recovery-alert-text"></p><button id="review-recovery" type="button" class="secondary" ${text('reviewRecovery')}></button></div>
       <div id="attribute-alert" class="notice recovery-alert" role="status" hidden><p id="attribute-alert-text"></p><button id="review-attributes" type="button" class="secondary" ${text('reviewAttributes')}></button></div>
-      <div class="segmented" role="group"><button id="encrypt-tab" aria-pressed="true" ${text('encrypt')}></button><button id="decrypt-tab" aria-pressed="false" ${text('decrypt')}></button><button id="verify-tab" aria-pressed="false" ${text('verify')}></button></div>
+      <div class="segmented" role="group" aria-labelledby="operation-label"><span id="operation-label" class="sr-only" ${text('operationType')}></span><button id="encrypt-tab" aria-pressed="true" ${text('encrypt')}></button><button id="decrypt-tab" aria-pressed="false" ${text('decrypt')}></button><button id="verify-tab" aria-pressed="false" ${text('verify')}></button></div>
       <div id="queue-overview" class="queue-overview" hidden><span id="queue-overview-text" role="status"></span><button id="review-queue" type="button" class="text-button" ${text('reviewQueue')}></button></div>
       <form id="vault-form" class="panel"><fieldset id="vault-fields"><legend class="sr-only" ${text('vault')}></legend>
-        <div class="section-heading"><span class="step">1</span><div><h2 ${text('selection')}></h2><p id="source-help"></p></div></div>
+        <div class="vault-columns"><section class="vault-source" aria-labelledby="selection-title">
+        <div class="section-heading"><span class="step">1</span><div><h2 id="selection-title" ${text('selection')}></h2><p id="source-help"></p></div></div>
         <div class="source-picker"><p id="drop-help"></p><div class="selection-actions"><button id="pick-file" type="button" class="secondary" ${text('pickFiles')}></button><button id="pick-folder" type="button" class="secondary" ${text('pickFolders')}></button></div></div>
         <details id="manual-sources" class="manual-sources"><summary ${text('manualSources')}></summary><label for="input-path" ${text('source')}></label><textarea id="input-path" rows="3" spellcheck="false" autocomplete="off"></textarea></details>
         <section id="draft" class="draft" hidden><div class="records-heading"><strong id="draft-count" role="status"></strong><button id="clear-sources" type="button" class="text-button" ${text('clearSources')}></button></div><ul id="source-list"></ul><p id="source-warning" class="source-warning" role="status"></p></section>
         <div id="output-fields"><label for="output-path" ${text('outputDirectory')}></label><div class="path-row"><input id="output-path" spellcheck="false" autocomplete="off"><button id="pick-output" type="button" class="secondary" ${text('chooseDirectory')}></button></div><p class="field-help" ${text('outputHelp')}></p></div>
-        <div class="divider"></div><div class="section-heading"><span class="step">2</span><div><h2 ${text('passwordTitle')}></h2><p ${text('passwordHelp')}></p></div></div>
+        </section><section class="vault-password" aria-labelledby="password-title"><div class="section-heading"><span class="step">2</span><div><h2 id="password-title" ${text('passwordTitle')}></h2><p ${text('passwordHelp')}></p></div></div>
         <div class="password-grid"><div><label for="password" ${text('password')}></label><input id="password" type="password" required maxlength="256" autocomplete="new-password"></div><div id="confirm-field"><label for="confirm-password" ${text('confirmPassword')}></label><input id="confirm-password" type="password" required maxlength="256" autocomplete="new-password"></div></div>
         <label class="checkbox"><input id="show-password" type="checkbox"><span ${text('showPassword')}></span></label><div class="notice" id="vault-notice"></div>
-        <div class="divider"></div><div class="form-footer"><div class="section-heading"><span class="step">3</span><div><h2 ${text('reviewTitle')}></h2><p id="review-help"></p></div></div><button class="primary" type="submit" ${text('add')}></button></div>
+        </section></div>
+        <div class="form-footer"><div class="section-heading"><span class="step">3</span><div><h2 ${text('reviewTitle')}></h2><p id="review-help"></p></div></div><button id="add-to-queue" class="primary" type="submit" ${text('add')}></button></div>
         <details class="usage-details"><summary ${text('usageDetails')}></summary><p class="field-help" ${text('formatLimits')}></p><p class="field-help" ${text('passwordMemory')}></p></details>
       </fieldset></form>
       <section id="package-preview" class="panel preview-panel" hidden aria-labelledby="preview-title"><div class="records-heading"><h2 id="preview-title" ${text('previewTitle')}></h2><button id="close-preview" type="button" class="text-button" ${text('closePreview')}></button></div><p id="preview-package" class="preview-package"></p><p class="notice" ${text('previewAuthenticated')}></p><p id="preview-summary" class="preview-summary"></p><p id="preview-limit" class="notice" hidden></p><p id="preview-empty" class="field-help" hidden ${text('emptyPackage')}></p><div class="preview-table-scroll" tabindex="0" role="region" aria-labelledby="preview-title"><table id="preview-table"><caption class="sr-only" ${text('previewTitle')}></caption><thead><tr><th scope="col" ${text('previewPath')}></th><th scope="col" ${text('previewType')}></th><th scope="col" ${text('previewSize')}></th></tr></thead><tbody id="preview-entries"></tbody></table></div><div class="preview-pagination"><span id="preview-page" role="status"></span><div class="selection-actions"><button id="preview-previous" type="button" class="secondary" ${text('previousPage')}></button><button id="preview-next" type="button" class="secondary" ${text('nextPage')}></button><button id="preview-restore" type="button" class="primary" ${text('prepareRestore')}></button></div></div><p class="field-help" ${text('previewPrivacy')}></p></section>
-      <section class="records queue"><h2 ${text('queue')}></h2><div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div><div id="queue-controls" class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul><details id="history-panel" class="history-panel"><summary id="history-summary"></summary><div class="records-heading"><p class="field-help" ${text('queueHelp')}></p><button id="clear-history" type="button" class="text-button" ${text('clearHistory')}></button></div><ul id="history-list"></ul></details></section>
+      <section class="records queue" aria-labelledby="queue-title"><h2 id="queue-title" tabindex="-1" ${text('queue')}></h2><div id="job-progress" class="job-progress" hidden><div class="records-heading"><strong id="progress-phase" role="status"></strong><button id="cancel-job" class="secondary" ${text('cancel')}></button></div><progress id="progress-bar" max="100"></progress><p id="progress-detail"></p><p id="progress-speed"></p><p id="progress-current" class="field-help"></p></div><div id="queue-controls" class="queue-controls"><button id="start-queue" class="primary" ${text('start')}></button><button id="pause-queue" class="secondary" ${text('pause')}></button></div><p id="queue-pause-status" class="notice" role="status" tabindex="-1" hidden></p><div id="batch-result" class="batch-result" hidden><p id="batch-summary" role="status"></p><button id="retry-batch" type="button" class="secondary" ${text('retryBatch')}></button></div><p id="queue-summary" role="status"></p><ul id="task-list"></ul><details id="history-panel" class="history-panel"><summary id="history-summary"></summary><div class="records-heading"><p class="field-help" ${text('queueHelp')}></p><button id="clear-history" type="button" class="text-button" ${text('clearHistory')}></button></div><ul id="history-list"></ul></details></section>
       <section class="records recovery"><div class="records-heading"><h2 ${text('jobs')}></h2><button id="refresh-jobs" class="text-button" ${text('refreshJobs')}></button></div><p class="field-help" ${text('jobsHelp')}></p><ul id="job-list"></ul></section>
     </section>
     <section id="attributes-panel" hidden>
-      <div class="protection-toolbar"><div class="selection-actions"><button id="pick-attribute-file" type="button" class="primary" ${text('addProtectionFiles')}></button><button id="pick-attribute-folder" type="button" class="secondary" ${text('addProtectionFolders')}></button><button id="open-attribute-form" type="button" class="text-button" aria-expanded="false" aria-controls="attribute-form" ${text('manualProtection')}></button><button id="review-managed-service" type="button" class="text-button" ${text('managedTitle')}></button></div><button id="refresh-records" class="secondary" type="button" ${text('refresh')}></button></div>
+      <div class="protection-toolbar"><div class="selection-actions"><button id="pick-attribute-file" type="button" class="primary" ${text('addProtectionFiles')}></button><button id="pick-attribute-folder" type="button" class="secondary" ${text('addProtectionFolders')}></button><button id="open-attribute-form" type="button" class="text-button" aria-expanded="false" aria-controls="attribute-form" ${text('manualProtection')}></button></div><button id="review-managed-service" type="button" class="text-button" ${text('managedTitle')}></button><button id="refresh-records" class="secondary" type="button" ${text('refresh')}></button></div>
       <div class="protection-description"><p class="field-help" ${text('managedRootsHelp')}></p><details><summary ${text('protectionDetails')}></summary><p class="notice attribute-notice" ${text('attributeNotice')}></p><p class="field-help" ${text('attributeHelp')}></p><p class="field-help" ${text('reapplyHelp')}></p></details><details class="protection-backup"><summary ${text('protectionBackup')}></summary><p class="field-help" ${text('protectionBackupHelp')}></p><div class="selection-actions"><button id="export-protection-backup" type="button" class="secondary" ${text('exportProtectionBackup')}></button><button id="import-protection-backup" type="button" class="secondary" ${text('importProtectionBackup')}></button></div><p id="protection-backup-feedback" class="protection-feedback" role="status" hidden></p><section id="backup-import-confirm" class="protection-confirm" hidden><p ${text('confirmProtectionImport')}></p><div class="selection-actions"><button id="confirm-protection-import" type="button" class="primary" ${text('confirmImport')}></button><button id="cancel-protection-import" type="button" class="secondary" ${text('cancel')}></button></div></section></details></div>
       <form id="attribute-form" class="panel protection-add" hidden><fieldset id="attribute-fields"><legend class="sr-only" ${text('attributes')}></legend><div class="protection-add-heading"><h2 ${text('manageAttributes')}></h2><button id="cancel-attribute-add" type="button" class="text-button" ${text('cancelAdd')}></button></div><p class="field-help" ${text('protectionDropHelp')}></p><ul id="protection-draft-list" class="protection-draft-list"></ul><details id="attribute-manual"><summary ${text('manualProtection')}></summary><label for="attribute-path" ${text('attributePath')}></label><input id="attribute-path" spellcheck="false" autocomplete="off"><button id="append-protection-path" type="button" class="text-button" ${text('appendProtectionPath')}></button></details>
         <label for="attribute-mode" ${text('policy')}></label><select id="attribute-mode"></select><p class="field-help" ${text('protectionApplyHelp')}></p><div id="protection-add-feedback" class="protection-feedback" role="status" aria-live="polite" hidden></div><ul id="protection-add-results" class="protection-item-results"></ul><div class="attribute-actions"><button id="apply-protection-draft" class="primary" type="submit" ${text('applyAttributes')}></button><button id="retry-protection-add" type="button" class="secondary" hidden ${text('retryFailedProtection')}></button></div>
@@ -55,7 +58,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="records saved-roots protection-records" aria-labelledby="roots-title"><div class="records-heading"><h2 id="roots-title" tabindex="-1" ${text('managedRoots')}></h2><form id="protection-search-form" class="protection-search" role="search"><label for="protection-search" class="sr-only" ${text('searchProtection')}></label><input id="protection-search" type="search" maxlength="160" autocomplete="off"><button id="search-protection" type="submit" class="secondary" ${text('search')}></button></form></div><p id="root-summary" role="status" class="field-help"></p><div id="records-feedback" class="protection-feedback" role="status" aria-live="polite" hidden></div><p class="field-help" ${text('verificationScope')}></p><div class="protection-bulk-toolbar"><label class="checkbox"><input id="select-protection-page" type="checkbox"><span ${text('selectProtectionPage')}></span></label><span id="selected-protection-count" role="status"></span><button id="verify-selected-protection" type="button" class="secondary" ${text('verifySelectedProtection')}></button><button id="restore-selected-protection" type="button" class="secondary" aria-controls="protection-restore-confirm" ${text('restoreSelectedProtection')}></button></div><section id="protection-restore-confirm" class="protection-confirm" hidden aria-labelledby="protection-restore-title"><h3 id="protection-restore-title" ${text('confirmSelectedRestore')}></h3><p id="protection-restore-count"></p><ul id="protection-restore-items"></ul><div class="selection-actions"><button id="confirm-selected-restore" type="button" class="primary" ${text('confirmRestore')}></button><button id="cancel-selected-restore" type="button" class="secondary" ${text('cancel')}></button></div></section><p id="protection-batch-feedback" class="protection-feedback" role="status" hidden></p><ul id="protection-batch-results" class="protection-item-results"></ul><div class="protection-columns" aria-hidden="true"><span ${text('rootName')}></span><span ${text('registeredMode')}></span><span ${text('verificationActions')}></span></div><ul id="root-list"></ul><div id="roots-pagination" class="selection-actions"><button id="roots-previous" class="secondary" type="button" ${text('previousPage')}></button><button id="roots-next" class="secondary" type="button" ${text('nextPage')}></button></div></section>
       <section id="managed-service-panel" aria-labelledby="managed-title"></section>
     </section>
-    <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div><section id="diagnostic" class="diagnostic" hidden><details><summary ${text('errorDetails')}></summary><p class="field-help" ${text('diagnosticPrivacy')}></p><pre id="diagnostic-text"></pre><div class="selection-actions"><button id="copy-diagnostic" type="button" class="secondary" ${text('copyDetails')}></button><button id="export-diagnostic" type="button" class="secondary" ${text('exportDetails')}></button></div><p id="diagnostic-status" role="status"></p></details></section><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
+    <section id="diagnostic" class="diagnostic" hidden><details><summary ${text('errorDetails')}></summary><p class="field-help" ${text('diagnosticPrivacy')}></p><pre id="diagnostic-text"></pre><div class="selection-actions"><button id="copy-diagnostic" type="button" class="secondary" ${text('copyDetails')}></button><button id="export-diagnostic" type="button" class="secondary" ${text('exportDetails')}></button></div><p id="diagnostic-status" role="status"></p></details></section><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
   </main>`;
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -109,6 +112,7 @@ const rootFeedback = new Map<string, ProtectionFeedback>();
 const rootVerification = new Map<string, RootVerification>();
 const aclRestoreReviews = new Map<string, string>();
 const rootRowIds = new WeakMap<HTMLElement, string>();
+const taskRowIds = new WeakMap<HTMLElement, string>();
 const pendingRootModes = new Map<string, ProtectionMode>();
 const rootNoteDrafts = new Map<string, string>();
 let addFeedback: ProtectionFeedback | null = null;
@@ -123,7 +127,8 @@ const queue = new TaskQueue(initialTasks, tasks => {
 }, () => { renderTasks(); syncControls(); });
 
 function showResult(key: MessageKey, values: Record<string, string | number> = {}, error = false): void {
-  lastResult = { key, values, error }; renderResult(); element('result').focus();
+  lastResult = { key, values, error }; renderResult();
+  if (error) element('result').focus();
 }
 function showError(error: unknown): void {
   console.error('FoldSentinel operation failed', error);
@@ -182,7 +187,7 @@ function syncControls(): void {
   element<HTMLButtonElement>('retry-protection-add').disabled = uiBusy || queue.running || protectionPreviewBusy || protectionPreviewFailed || !protectionAddResults.some(result => !result.succeeded);
   document.querySelectorAll<HTMLButtonElement>('#job-list button').forEach(button => { button.disabled = uiBusy || queue.running; });
   element<HTMLButtonElement>('start-queue').disabled = uiBusy || queue.running || !queue.tasks.some(t => t.status === 'waiting');
-  element<HTMLButtonElement>('pause-queue').disabled = !queue.running;
+  element<HTMLButtonElement>('pause-queue').disabled = !queue.running || queue.pauseRequested;
   element<HTMLButtonElement>('start-queue').hidden = queue.running;
   element<HTMLButtonElement>('pause-queue').hidden = !queue.running;
   element('queue-controls').hidden = !queue.running && !queue.tasks.some(task => task.status === 'waiting');
@@ -355,7 +360,7 @@ element('start-queue').onclick = () => {
   if (!isTauri()) { showResult('desktopRequired', {}, true); return; }
   void queue.start(perform, failureCode).catch(showError).finally(() => { void refreshJobs().catch(showError); });
 };
-element('pause-queue').onclick = () => { queue.pause(); showResult('paused'); };
+element('pause-queue').onclick = () => { queue.pause(); element('queue-pause-status').focus(); };
 element('cancel-job').onclick = () => {
   element<HTMLButtonElement>('cancel-job').disabled = true;
   void invoke<boolean>('cancel_vault').then(accepted => { cancelling = accepted; if (progress) updateProgress(progress); }).catch(showError);
@@ -371,11 +376,17 @@ function refill(plan: Plan): void {
   clearPasswords(); showResult('retryHelp'); input('password').focus();
 }
 function renderTasks(): void {
-  const list = element('task-list'); list.replaceChildren();
-  const history = element('history-list'); history.replaceChildren();
+  const list = element('task-list'); const history = element('history-list');
+  const active = document.activeElement;
+  const activeRow = active instanceof HTMLElement ? active.closest<HTMLElement>('.task-item') : null;
+  const focus = active instanceof HTMLElement && (list.contains(active) || history.contains(active))
+    ? { id: activeRow ? taskRowIds.get(activeRow) : undefined, action: active.dataset.taskAction } : null;
+  list.replaceChildren(); history.replaceChildren();
   const count = (status: string) => queue.tasks.filter(t => t.status === status).length;
   const queueText = t('queueSummary', { waiting: count('waiting'), running: count('running'), done: count('succeeded'), failed: count('failed'), stopped: count('cancelled') + count('interrupted') });
   element('queue-summary').textContent = queueText;
+  element('queue-pause-status').hidden = !queue.pauseRequested;
+  element('queue-pause-status').textContent = queue.pauseRequested ? t('paused') : '';
   element('queue-overview-text').textContent = count('waiting') && !queue.running ? t('queueNotStarted', { n: count('waiting') }) : t('queueRunningOverview');
   element('queue-overview').hidden = !queue.running && count('waiting') === 0;
   const latestBatch = [...queue.tasks].reverse().find(task => task.batchId)?.batchId;
@@ -406,18 +417,26 @@ function renderTasks(): void {
   }
   const ordered = [...pending, ...finished];
   for (const task of ordered) {
-    const item = document.createElement('li'); item.className = 'task-item';
+    const item = document.createElement('li'); item.className = 'task-item'; taskRowIds.set(item, task.id);
+    const action = (key: MessageKey, callback: () => void) => {
+      const control = button(key, callback); control.dataset.taskAction = key; item.append(control);
+    };
     const detail = document.createElement('div'); const title = document.createElement('strong'); title.textContent = `${t(task.operation)} · ${task.input.replace(/^\\\\\?\\/, '')}`;
     const output = document.createElement('p'); output.textContent = task.output ? t('output', { path: task.output.replace(/^\\\\\?\\/, '') }) : t('noOutput');
     const status = document.createElement('p'); status.className = `task-status ${task.status}`; status.textContent = `${t(task.status)} · ${new Date(task.endedAt ?? task.createdAt).toLocaleString(language)}`;
     detail.append(title, output, status);
     if (task.code) { const error = document.createElement('p'); error.className = 'task-error'; error.textContent = errorText(task.code); detail.append(error); }
     item.append(detail);
-    if (task.status === 'waiting') item.append(button('cancel', () => { try { queue.cancelWaiting(task.id); } catch (error) { showError(error); } }));
-    else if (['failed', 'cancelled', 'interrupted'].includes(task.status)) item.append(button('retry', () => refill(task)));
-    if (task.status === 'succeeded' && task.output) item.append(button('openOutput', () => { void runUi(async () => { await invoke('open_output_folder', { path: task.output }); }); }));
-    if (task.status === 'succeeded' && task.operation === 'verify') item.append(button('inspectAgain', () => refill(task)));
+    if (task.status === 'waiting') action('cancel', () => { try { queue.cancelWaiting(task.id); } catch (error) { showError(error); } });
+    else if (['failed', 'cancelled', 'interrupted'].includes(task.status)) action('retry', () => refill(task));
+    if (task.status === 'succeeded' && task.output) action('openOutput', () => { void runUi(async () => { await invoke('open_output_folder', { path: task.output }); }); });
+    if (task.status === 'succeeded' && task.operation === 'verify') action('inspectAgain', () => refill(task));
     (['waiting', 'running'].includes(task.status) ? list : history).append(item);
+  }
+  if (focus) {
+    const row = Array.from(document.querySelectorAll<HTMLElement>('#task-list .task-item, #history-list .task-item')).find(item => taskRowIds.get(item) === focus.id);
+    const target = row && Array.from(row.querySelectorAll<HTMLButtonElement>('[data-task-action]')).find(control => control.dataset.taskAction === focus.action);
+    (target && !target.disabled ? target : element('queue-title')).focus({ preventScroll: true });
   }
 }
 
@@ -482,7 +501,11 @@ function renderRecords(): void {
   const snapshot = recordState.snapshot;
   const roots = element('root-list'); roots.replaceChildren(); element('root-summary').textContent = '';
   element('attribute-alert').hidden = !snapshot?.overall_total;
-  if (!snapshot) { renderRecordsFeedback(); return; }
+  if (!snapshot) {
+    element('roots-pagination').hidden = true;
+    if (!isTauri()) { const preview = document.createElement('li'); preview.className = 'empty-records'; preview.textContent = t('protectionPreview'); roots.append(preview); }
+    renderRecordsFeedback(); return;
+  }
   const visibleIds = new Set(snapshot.roots.map(root => root.id));
   for (const id of selectedProtection) if (!visibleIds.has(id)) selectedProtection.delete(id);
   element('attribute-alert-text').textContent = t('managedRootAttention', { n: snapshot.overall_total });
@@ -798,7 +821,7 @@ element('root-list').addEventListener('change', event => {
   const row = target.closest<HTMLElement>('.root-record'); const id = row && rootRowIds.get(row);
   if (id) pendingRootModes.set(id, target.value as ProtectionMode);
 });
-element('review-queue').onclick = () => { element('task-list').scrollIntoView({ block: 'start' }); element('start-queue').focus({ preventScroll: true }); };
+element('review-queue').onclick = () => { element('queue-title').scrollIntoView({ block: 'start' }); element('queue-title').focus({ preventScroll: true }); };
 function showPage(): void {
   managedUi?.setVisible(page === 'attributes');
   for (const value of ['vault', 'attributes'] as const) {
@@ -807,8 +830,8 @@ function showPage(): void {
   }
   element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
 }
-for (const value of ['vault', 'attributes'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); showPage(); if (value === 'attributes' && !uiBusy && !queue.running) void refreshProtectionPage(); };
-element('review-attributes').onclick = () => { page = 'attributes'; clearPasswords(); showPage(); element('roots-title').focus(); void refreshProtectionPage(); };
+for (const value of ['vault', 'attributes'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); lastResult = null; renderResult(); showPage(); element('page-title').focus(); if (value === 'attributes' && isTauri() && !uiBusy && !queue.running) void refreshProtectionPage(); };
+element('review-attributes').onclick = () => { page = 'attributes'; clearPasswords(); lastResult = null; renderResult(); showPage(); element('roots-title').focus(); if (isTauri()) void refreshProtectionPage(); };
 element('review-managed-service').onclick = () => { managedUi?.clearPasswords(); element('managed-service-panel').scrollIntoView({ block: 'start' }); element('managed-title').focus({ preventScroll: true }); };
 
 managedUi = new ManagedProtectionUi(element('managed-service-panel'), {

@@ -1,6 +1,7 @@
 mod acl;
 mod attributes;
 mod backup;
+pub mod lifecycle;
 pub mod managed;
 pub mod service;
 pub mod vault;
@@ -155,6 +156,7 @@ pub struct StateStore {
     path: PathBuf,
     data: StateFile,
     _lock: File,
+    _lifecycle: Option<lifecycle::OperationGuard>,
     #[cfg(test)]
     local_check: Option<LocalRangeCheck>,
 }
@@ -175,12 +177,26 @@ impl StateStore {
     }
 
     pub fn load_from(path: PathBuf) -> Result<Self> {
+        Self::load_impl(path, true)
+    }
+
+    /// 卸载 helper 持有生命周期独占门时读取保护记录，避免误走普通文件操作入口。
+    pub fn load_for_uninstall(path: PathBuf) -> Result<Self> {
+        Self::load_impl(path, false)
+    }
+
+    fn load_impl(path: PathBuf, operation: bool) -> Result<Self> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         fs::create_dir_all(parent).context("创建恢复记录目录失败")?;
         let path = fs::canonicalize(parent)?.join(path.file_name().context("状态文件缺少名称")?);
+        let lifecycle = if operation {
+            Some(lifecycle::OperationGuard::acquire(parent)?)
+        } else {
+            None
+        };
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -200,6 +216,7 @@ impl StateStore {
             path,
             data,
             _lock: lock,
+            _lifecycle: lifecycle,
             #[cfg(test)]
             local_check: None,
         })

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 fn control(dir: &Path) -> Control {
@@ -178,7 +179,16 @@ fn inspection_is_bounded_and_still_authenticates_the_end() {
         ErrorCode::Cancelled
     );
     assert!(!dir.path().join("jobs").exists());
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    let names: BTreeSet<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(names.is_subset(&BTreeSet::from([
+        std::ffi::OsString::from("many.fse"),
+        std::ffi::OsString::from("lifecycle.lock"),
+        std::ffi::OsString::from("vault-inventory.json"),
+        std::ffi::OsString::from("vault-inventory.lock"),
+    ])));
 }
 
 #[test]

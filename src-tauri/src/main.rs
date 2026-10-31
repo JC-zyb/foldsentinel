@@ -8,6 +8,7 @@ use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
 mod attributes;
 mod support;
+mod uninstall;
 
 #[derive(Default)]
 struct ActiveJob(Mutex<Option<vault::Control>>);
@@ -346,6 +347,9 @@ async fn managed_protection(
 }
 
 fn main() {
+    if let Some(code) = uninstall::maybe_run() {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .manage(ActiveJob::default())
         .plugin(tauri_plugin_dialog::init())

@@ -95,6 +95,13 @@ enum MonitoringArg {
 
 #[derive(Debug, Subcommand)]
 enum VaultCommand {
+    /// 扫描指定旧包目录并登记内容指纹；不解密，扫描不完整时返回错误。
+    Discover {
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
+    },
+    /// 列出独立加密资产记录，包含待恢复和无法访问的位置。
+    Inventory,
     /// Encrypt a file or folder into the FoldSentinel FSEAL format.
     Encrypt { input: PathBuf, output: PathBuf },
     /// Decrypt a FoldSentinel FSEAL file.
@@ -188,6 +195,27 @@ fn main() -> Result<()> {
         Command::StatePath => println!("{}", default_state_path()?.display()),
         Command::Managed { command } => run_managed(command)?,
         Command::Vault { command } => match command {
+            VaultCommand::Discover { paths } => {
+                let data_dir = foldsentinel::lifecycle::default_data_dir()?;
+                let _guard = foldsentinel::lifecycle::OperationGuard::acquire(&data_dir)?;
+                let paths = paths
+                    .into_iter()
+                    .map(std::fs::canonicalize)
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let report = vault::inventory::discover(&paths, &data_dir)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                if !report.complete || !report.issues.is_empty() {
+                    bail!("旧包扫描不完整；已发现的包已登记，错误不能视为无加密项目");
+                }
+            }
+            VaultCommand::Inventory => {
+                let data_dir = foldsentinel::lifecycle::default_data_dir()?;
+                let _guard = foldsentinel::lifecycle::OperationGuard::acquire(&data_dir)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&vault::inventory::snapshot(&data_dir)?)?
+                );
+            }
             VaultCommand::Encrypt { input, output } => {
                 let password = read_password(true)?;
                 let control = cli_control()?;

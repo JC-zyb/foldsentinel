@@ -1,5 +1,6 @@
 mod control;
 mod error;
+pub mod inventory;
 mod legacy;
 mod preview;
 pub mod recovery;
@@ -40,19 +41,26 @@ pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
     decrypt_with_control(input, output, password, &Control::new(|_| {})?)
 }
 
-/// 只读验证：完整认证内容及归档结构，不创建临时明文或输出文件。
+/// 只读验证：完整认证内容及归档结构，不创建临时明文或输出文件；成功后登记资产位置。
 pub fn verify_with_control(input: &Path, password: &str, control: &Control) -> Result<VaultReport> {
-    verify_content(input, password, control, None).map(|(report, _)| report)
+    let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
+    let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
+    let (report, _) = verify_content(input, password, control, None)?;
+    inventory::observe(data_dir, &fs::canonicalize(input)?)?;
+    Ok(report)
 }
 
-/// 完整认证成功后返回有界元数据；不创建输出、临时明文或任务登记。
+/// 完整认证成功后返回有界元数据；不创建输出或临时明文，但会登记资产位置。
 pub fn inspect_with_control(
     input: &Path,
     password: &str,
     control: &Control,
 ) -> Result<VaultInspection> {
+    let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
+    let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
     let mut preview = preview::PreviewBuilder::default();
     let (report, version) = verify_content(input, password, control, Some(&mut preview))?;
+    inventory::observe(data_dir, &fs::canonicalize(input)?)?;
     Ok(preview.finish(version, report))
 }
 
@@ -241,6 +249,8 @@ pub fn encrypt_with_control(
     password: &str,
     control: &Control,
 ) -> Result<VaultReport> {
+    let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
+    let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
     legacy::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
@@ -363,8 +373,17 @@ pub fn encrypt_with_control(
         control.phase("syncing", "");
         target.sync_all().context(ErrorCode::WriteFailed)?;
         drop(target);
-        control.begin_commit()?;
-        commit(&job.payload(), &output)?;
+        let fingerprint = inventory::record_pending(data_dir, &job.payload(), &output)?;
+        if let Err(error) = control
+            .begin_commit()
+            .and_then(|_| commit(&job.payload(), &output))
+        {
+            return match inventory::rollback_pending(data_dir, &fingerprint, &output) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(error).context(format!("资产登记保留待检查: {rollback:#}")),
+            };
+        }
+        inventory::mark_encrypted(data_dir, &fingerprint, &output)?;
         Ok(VaultReport {
             input_bytes: total,
             output_bytes: written,
@@ -382,11 +401,14 @@ pub fn decrypt_with_control(
     password: &str,
     control: &Control,
 ) -> Result<VaultReport> {
+    let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
+    let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
     legacy::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
     let input = fs::canonicalize(input)?;
     let output = legacy::output_path(output)?;
+    let fingerprint = inventory::observe(data_dir, &input)?;
     let mut source = open_stable(&input)?;
     let wire_size = source.metadata()?.len();
     let mut magic = [0; 8];
@@ -399,6 +421,7 @@ pub fn decrypt_with_control(
             control.check()?;
             control.begin_commit()?;
             commit(&job.payload(), &output)?;
+            inventory::mark_restored(data_dir, &fingerprint, &input, &output)?;
             return Ok(VaultReport {
                 input_bytes: report.input_bytes as u64,
                 output_bytes: report.output_bytes as u64,
@@ -444,6 +467,7 @@ pub fn decrypt_with_control(
         }
         control.begin_commit()?;
         commit(&job.payload(), &output)?;
+        inventory::mark_restored(data_dir, &fingerprint, &input, &output)?;
         Ok(VaultReport {
             input_bytes: wire_size,
             output_bytes: size,

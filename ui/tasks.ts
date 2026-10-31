@@ -75,6 +75,7 @@ export class TaskQueue {
   private paused = false;
   private secrets = new Map<string, string>();
   constructor(tasks: Task[], private save: (tasks: Task[]) => void, private changed: () => void) { this.tasks = tasks; }
+  get pauseRequested(): boolean { return this.paused; }
   add(plans: Plan[], password: string): void {
     if (!password || !plans.length || this.tasks.filter(t => ['waiting', 'running'].includes(t.status)).length + plans.length > 100) throw new Error('queue_limit');
     const batchId = crypto.randomUUID();

@@ -37,6 +37,7 @@ impl Request {
 pub enum Command {
     Status,
     List,
+    UninstallAudit,
     CheckLocal {
         path: PathBuf,
     },
@@ -108,7 +109,7 @@ impl Command {
         let valid_id =
             |id: &str| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control);
         let valid = match self {
-            Self::Status | Self::List => true,
+            Self::Status | Self::List | Self::UninstallAudit => true,
             Self::CheckLocal { path } => valid_local_check_path(path),
             Self::Enroll {
                 path,
@@ -175,6 +176,14 @@ pub struct Response {
     pub error: Option<ErrorCode>,
 }
 
+/// 卸载前的全账户汇总；不包含SID、路径、密码或单项恢复资料。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UninstallAudit {
+    pub registered: usize,
+    pub has_errors: bool,
+}
+
 impl Response {
     pub fn into_result(self) -> Result<Value> {
         if self.version != PROTOCOL_VERSION {
@@ -237,6 +246,72 @@ pub fn request(request: &Request) -> Result<Response> {
         let _ = request;
         bail!(ErrorCode::ProtectionUnsupported)
     }
+}
+
+/// 只有SCM明确报告服务不存在才返回false；查询权限或状态错误必须向上传递。
+pub fn is_installed() -> Result<bool> {
+    #[cfg(windows)]
+    {
+        windows::service_is_installed()
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
+/// 通过已鉴权的运行中服务读取全部账户登记总数。失联和旧协议不能当作无保护。
+pub fn uninstall_audit() -> Result<Option<UninstallAudit>> {
+    uninstall_audit_using(is_installed, || {
+        request(&Request::new(Command::UninstallAudit))
+    })
+}
+
+/// 管理员执行一次正常服务卸载。运行中的服务先审计为空才停止，停止后再次审计。
+/// 只有全账户恢复审计为空且固定程序目录安全时才会删除。
+pub fn uninstall_empty() -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::uninstall_empty()
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
+/// 管理员执行已经由调用方双重确认的强制卸载；保留全部 ProgramData 恢复资料。
+/// 此 API 只跳过受管项目空审计，不跳过身份、固定程序路径和服务停止核验。
+pub fn uninstall_forced() -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::uninstall_forced()
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
+fn uninstall_audit_using(
+    installed: impl FnOnce() -> Result<bool>,
+    read: impl FnOnce() -> Result<Response>,
+) -> Result<Option<UninstallAudit>> {
+    if !installed().context(ErrorCode::ServiceUnavailable)? {
+        return Ok(None);
+    }
+    let response = read().context(ErrorCode::ServiceUnavailable)?;
+    if response.version != PROTOCOL_VERSION
+        || response.transport.host != "service"
+        || !response.transport.healthy
+        || response.transport.last_tick_error.is_some()
+        || response.error.is_some()
+    {
+        bail!(ErrorCode::ServiceUnavailable);
+    }
+    let audit = serde_json::from_value(response.data.context(ErrorCode::ServiceUnavailable)?)
+        .context(ErrorCode::ServiceUnavailable)?;
+    Ok(Some(audit))
 }
 
 /// 本地保护在修改前排除所有账户的服务受管范围；服务失联不能当作空范围。
@@ -377,7 +452,7 @@ fn decode_request(bytes: &[u8]) -> Result<Request> {
         .and_then(Value::as_object)
         .context(ErrorCode::InvalidInput)?;
     let allowed: &[&str] = match command.get("action").and_then(Value::as_str) {
-        Some("status" | "list") => &["action"],
+        Some("status" | "list" | "uninstall_audit") => &["action"],
         Some("check_local") => &["action", "path"],
         Some("enroll") => &["action", "path", "mode", "note", "password"],
         Some("unlock") => &["action", "id", "password", "duration_seconds"],
@@ -425,6 +500,60 @@ mod tests {
             data: Some(serde_json::json!({"available": true})),
             error: None,
         }
+    }
+
+    #[test]
+    fn uninstall_audit_requires_strict_all_account_response() {
+        assert_eq!(
+            uninstall_audit_using(|| Ok(false), || panic!("absent service must not connect"))
+                .unwrap(),
+            None
+        );
+        let response = || {
+            let mut response = available_response();
+            response.data = Some(serde_json::json!({"registered": 3, "has_errors": true}));
+            response
+        };
+        assert_eq!(
+            uninstall_audit_using(|| Ok(true), || Ok(response())).unwrap(),
+            Some(UninstallAudit {
+                registered: 3,
+                has_errors: true
+            })
+        );
+        for data in [
+            serde_json::json!({"registered": 0}),
+            serde_json::json!({"registered": -1, "has_errors": false}),
+            serde_json::json!({"registered": 0, "has_errors": false, "sid": "secret"}),
+            serde_json::Value::Null,
+        ] {
+            let mut invalid = response();
+            invalid.data = Some(data);
+            assert!(uninstall_audit_using(|| Ok(true), || Ok(invalid)).is_err());
+        }
+        for invalid in 0..5 {
+            let mut value = response();
+            match invalid {
+                0 => value.version += 1,
+                1 => value.transport.host = "console".to_owned(),
+                2 => value.transport.healthy = false,
+                3 => value.transport.last_tick_error = Some(ErrorCode::Recovery),
+                _ => value.error = Some(ErrorCode::InvalidInput),
+            }
+            assert_eq!(
+                error_code(&uninstall_audit_using(|| Ok(true), || Ok(value)).unwrap_err()),
+                ErrorCode::ServiceUnavailable
+            );
+        }
+        assert!(uninstall_audit_using(|| bail!("SCM denied"), || Ok(response())).is_err());
+        assert!(uninstall_audit_using(|| Ok(true), || bail!("pipe disconnected")).is_err());
+        assert!(decode_request(br#"{"version":1,"command":{"action":"uninstall_audit"}}"#).is_ok());
+        assert!(
+            decode_request(
+                br#"{"version":1,"command":{"action":"uninstall_audit","sid":"other"}}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

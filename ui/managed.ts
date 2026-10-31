@@ -74,6 +74,8 @@ export class ManagedProtectionUi {
   }
   async refresh(automatic = false): Promise<void> {
     if (this.loading || this.options.isBlocked() || !this.options.isDesktop()) return;
+    const focus = this.activeFocus();
+    const focusedElement = document.activeElement;
     if (!automatic) { this.clearPasswords(); this.editor = null; this.editorOrigin = null; }
     this.loading = true; this.sync();
     try {
@@ -86,7 +88,14 @@ export class ManagedProtectionUi {
       this.available = false; this.stale = !!this.snapshot;
       if (!this.snapshot) this.transport = null;
       this.feedback = this.snapshot ? { key: 'managedRefreshFailed', error: true } : { code: failureCode(error), error: true };
-    } finally { this.loading = false; this.render(); this.schedulePoll(); }
+    } finally {
+      this.loading = false;
+      // 禁用按钮会让浏览器清除焦点；用户已转到其他控件时不再拉回。
+      const restoreDisabledFocus = focus && (document.activeElement === document.body || document.activeElement === focusedElement);
+      this.render();
+      if (restoreDisabledFocus) this.restoreFocus(focus);
+      this.schedulePoll();
+    }
   }
   private filtered(): ServiceRoot[] {
     const query = this.query.toLowerCase();
@@ -96,12 +105,15 @@ export class ManagedProtectionUi {
     if (!this.available || this.stale || this.options.isBlocked()) return;
     this.editorOrigin = this.activeFocus();
     this.clearPasswords(); this.editor = { kind, root }; this.render();
-    const focus = this.container.querySelector<HTMLInputElement>('#managed-editor input:not([type=checkbox])'); focus?.focus({ preventScroll: true });
+    const editor = this.element('managed-editor');
+    const focus = Array.from(editor.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input:not([type=checkbox]), select, button'))
+      .find(control => !control.disabled && control.getClientRects().length > 0);
+    (focus ?? editor.querySelector<HTMLElement>('legend'))?.focus();
   }
   private close(): void {
     const focus = this.editorOrigin; this.editorOrigin = null;
     this.clearPasswords(); this.editor = null; this.render();
-    if (focus) this.restoreFocus(focus); else this.element('managed-add').focus({ preventScroll: true });
+    if (focus) this.restoreFocus(focus, false); else this.element('managed-add').focus();
     this.schedulePoll();
   }
   private activeFocus(): { id: string | null; action: string } | null {
@@ -110,16 +122,16 @@ export class ManagedProtectionUi {
     if (!action) return null;
     return { id: row ? this.rowIds.get(row) ?? null : null, action };
   }
-  private restoreFocus(focus: ReturnType<ManagedProtectionUi['activeFocus']>): void {
+  private restoreFocus(focus: ReturnType<ManagedProtectionUi['activeFocus']>, preventScroll = true): void {
     if (!focus) return;
     if (focus.id === null) {
-      const target = this.container.querySelector<HTMLButtonElement>(`[data-managed-action="${focus.action}"], [data-focus-action="${focus.action}"]`);
-      (target && !target.disabled ? target : this.element('managed-title')).focus({ preventScroll: true });
+      const target = this.container.querySelector<HTMLElement>(`[data-managed-action="${focus.action}"], [data-focus-action="${focus.action}"]`);
+      (target && !(target instanceof HTMLButtonElement && target.disabled) ? target : this.element('managed-title')).focus({ preventScroll });
       return;
     }
     const row = Array.from(this.container.querySelectorAll<HTMLElement>('.managed-root')).find(row => this.rowIds.get(row) === focus.id);
     const button = row?.querySelector<HTMLButtonElement>(`[data-managed-action="${focus.action}"]`);
-    (button && !button.disabled ? button : this.element('managed-title')).focus({ preventScroll: true });
+    (button && !button.disabled ? button : this.element('managed-title')).focus({ preventScroll });
   }
   private async execute(command: ManagedCommand, success: MessageKey, root?: ServiceRoot): Promise<void> {
     if (this.options.isBlocked() || !this.available || this.stale) { clearManagedCommand(command); return; }
@@ -148,7 +160,9 @@ export class ManagedProtectionUi {
   }
 
   private render(): void {
-    const focus = this.activeFocus(); this.container.replaceChildren();
+    const focus = this.activeFocus();
+    const helpOpen = this.container.querySelector<HTMLDetailsElement>('.managed-service-help')?.open ?? false;
+    this.container.replaceChildren();
     this.container.className = 'records managed-protection';
     const header = document.createElement('div'); header.className = 'records-heading';
     const heading = document.createElement('h2'); heading.id = 'managed-title'; heading.tabIndex = -1; heading.textContent = t('managedTitle');
@@ -156,7 +170,8 @@ export class ManagedProtectionUi {
     const status = this.paragraph(this.options.isDesktop() ? !this.available ? t(this.snapshot ? 'managedServiceLost' : 'managedServiceUnavailable') : t(this.transport?.healthy ? 'managedServiceConnected' : 'managedServiceDegraded') : t('managedServicePreview'), 'managed-service-status');
     status.id = 'managed-service-status'; status.setAttribute('role', 'status'); this.container.append(status);
     if (this.transport?.last_tick_error) this.container.append(this.paragraph(errorText(this.transport.last_tick_error), 'managed-service-error'));
-    const details = document.createElement('details'); details.className = 'managed-service-help'; const summary = document.createElement('summary'); summary.textContent = t('managedServiceDetails'); details.append(summary, this.paragraph(t('managedServiceInstallHelp')), this.paragraph(t('managedServiceScope')), this.paragraph(t('managedServicePasswordBoundary'))); this.container.append(details);
+    const details = document.createElement('details'); details.className = 'managed-service-help'; details.open = helpOpen;
+    const summary = document.createElement('summary'); summary.dataset.focusAction = 'service-help'; summary.textContent = t('managedServiceDetails'); details.append(summary, this.paragraph(t('managedServiceInstallHelp')), this.paragraph(t('managedServiceScope')), this.paragraph(t('managedServicePasswordBoundary'))); this.container.append(details);
     if (this.feedback) { const feedback = this.paragraph(this.feedbackText(this.feedback), `protection-feedback${this.feedback.error ? ' error' : ''}`); feedback.id = 'managed-feedback'; feedback.setAttribute('role', this.feedback.error ? 'alert' : 'status'); this.container.append(feedback); }
     const tools = document.createElement('div'); tools.className = 'managed-tools';
     const add = this.button('managedAdd', () => this.open('enroll'), true); add.id = 'managed-add'; add.dataset.managedAction = 'enroll'; tools.append(add);
@@ -211,7 +226,7 @@ export class ManagedProtectionUi {
     const form = document.createElement('form'); form.id = 'managed-editor'; form.className = 'managed-editor'; form.autocomplete = 'off'; form.noValidate = true;
     const fieldset = document.createElement('fieldset'); const legend = document.createElement('legend');
     const titles = { enroll: 'managedAdd', unlock: 'managedUnlock', password: 'managedPasswordSettings', remove: 'confirmSelectedRestore', continuous: root?.monitoring ? 'managedStopMonitoring' : 'managedStartMonitoring' } as const;
-    legend.textContent = t(titles[editor.kind]); fieldset.append(legend);
+    legend.textContent = t(titles[editor.kind]); legend.tabIndex = -1; fieldset.append(legend);
     if (root) { const name = document.createElement('strong'); name.textContent = `${root.name}${root.note ? ` · ${root.note}` : ''}`; fieldset.append(name); }
     const field = (key: MessageKey, id: string, type = 'text', required = false): HTMLInputElement => {
       const label = document.createElement('label'); label.htmlFor = id; label.textContent = t(key); const input = document.createElement('input'); input.id = id; input.type = type; input.required = required; input.autocomplete = type === 'password' ? 'off' : 'off';

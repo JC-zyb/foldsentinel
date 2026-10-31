@@ -5,9 +5,10 @@ use std::ffi::{OsStr, c_void};
 use std::fs::{self, File, OpenOptions};
 use std::os::windows::{
     ffi::OsStrExt,
-    fs::OpenOptionsExt,
+    fs::{MetadataExt, OpenOptionsExt},
     io::{AsRawHandle, FromRawHandle, OwnedHandle},
 };
+use std::process::Command as ProcessCommand;
 use std::ptr::{null, null_mut};
 use std::sync::{
     Mutex,
@@ -20,7 +21,7 @@ use windows_sys::Win32::{
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
     System::{Com::CoTaskMemFree, IO::*, Pipes::*, Services::*, Threading::*},
-    UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath},
+    UI::Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles, SHGetKnownFolderPath},
 };
 
 const SYSTEM_SID: &str = "S-1-5-18";
@@ -28,6 +29,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_AUTHORIZED_ENTRIES: usize = 100_000;
 const MAX_ACCOUNTS: usize = 256;
+const SERVICE_STOP_ACCESS: u32 = 0x0020;
 static SERVICE_STOP: AtomicBool = AtomicBool::new(false);
 static SERVICE_STATUS_HANDLE: AtomicUsize = AtomicUsize::new(0);
 
@@ -142,6 +144,369 @@ pub(super) fn service_is_installed() -> Result<bool> {
     }
     let _service = ServiceHandle(service);
     Ok(true)
+}
+
+fn require_administrator() -> Result<()> {
+    let mut token = null_mut();
+    unsafe {
+        checked(OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY,
+            &mut token,
+        ))?;
+    }
+    let token = unsafe { Handle::new(token)? };
+    let mut elevation: TOKEN_ELEVATION = unsafe { std::mem::zeroed() };
+    let mut size = 0;
+    unsafe {
+        checked(GetTokenInformation(
+            token.raw(),
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        ))?;
+    }
+    if elevation.TokenIsElevated == 0 {
+        bail!(ErrorCode::PermissionDenied);
+    }
+    Ok(())
+}
+
+fn service_status(handle: SC_HANDLE) -> Result<SERVICE_STATUS_PROCESS> {
+    let mut status: SERVICE_STATUS_PROCESS = unsafe { std::mem::zeroed() };
+    let mut needed = 0;
+    unsafe {
+        checked(QueryServiceStatusEx(
+            handle,
+            SC_STATUS_PROCESS_INFO,
+            (&mut status as *mut SERVICE_STATUS_PROCESS).cast(),
+            size_of::<SERVICE_STATUS_PROCESS>() as u32,
+            &mut needed,
+        ))?;
+    }
+    Ok(status)
+}
+
+fn service_binary_path(handle: SC_HANDLE) -> Result<String> {
+    let mut needed = 0;
+    unsafe {
+        QueryServiceConfigW(handle, null_mut(), 0, &mut needed);
+    }
+    if !(size_of::<QUERY_SERVICE_CONFIGW>() as u32..=8192).contains(&needed) {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    let mut buffer = vec![0usize; (needed as usize).div_ceil(size_of::<usize>())];
+    let config = buffer.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>();
+    unsafe {
+        checked(QueryServiceConfigW(handle, config, needed, &mut needed))?;
+        if (*config).dwServiceType != SERVICE_WIN32_OWN_PROCESS
+            || (*config).lpBinaryPathName.is_null()
+            || (*config).lpServiceStartName.is_null()
+        {
+            bail!(ErrorCode::ProtectionConflict);
+        }
+        let mut account_length = 0;
+        while account_length < 128 && *(*config).lpServiceStartName.add(account_length) != 0 {
+            account_length += 1;
+        }
+        if account_length == 128
+            || !String::from_utf16(std::slice::from_raw_parts(
+                (*config).lpServiceStartName,
+                account_length,
+            ))?
+            .eq_ignore_ascii_case("LocalSystem")
+        {
+            bail!(ErrorCode::ProtectionConflict);
+        }
+        let mut length = 0;
+        while length < 32760 && *(*config).lpBinaryPathName.add(length) != 0 {
+            length += 1;
+        }
+        if length == 32760 {
+            bail!(ErrorCode::ProtectionConflict);
+        }
+        Ok(String::from_utf16(std::slice::from_raw_parts(
+            (*config).lpBinaryPathName,
+            length,
+        ))?)
+    }
+}
+
+fn program_files_directory() -> Result<PathBuf> {
+    let mut value = null_mut();
+    let result = unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, null_mut(), &mut value) };
+    if result < 0 {
+        bail!(ErrorCode::ServiceUnavailable);
+    }
+    let mut length = 0;
+    unsafe {
+        while *value.add(length) != 0 {
+            length += 1;
+        }
+    }
+    let value_string = unsafe { String::from_utf16(std::slice::from_raw_parts(value, length)) };
+    unsafe {
+        CoTaskMemFree(value.cast());
+    }
+    Ok(PathBuf::from(value_string?).join("FoldSentinel Protection"))
+}
+
+fn has_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn verify_program_directory(directory: &Path) -> Result<PathBuf> {
+    let metadata = fs::symlink_metadata(directory).context(ErrorCode::ServiceUnavailable)?;
+    if !metadata.is_dir() || has_reparse_point(&metadata) {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    for ancestor in directory.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).context(ErrorCode::ServiceUnavailable)?;
+        if has_reparse_point(&metadata) {
+            bail!(ErrorCode::ProtectionConflict);
+        }
+    }
+    let binary = directory.join("foldsentinel-service.exe");
+    let binary_metadata = fs::symlink_metadata(&binary).context(ErrorCode::ServiceUnavailable)?;
+    if !binary_metadata.is_file() || has_reparse_point(&binary_metadata) {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    for entry in fs::read_dir(directory).context(ErrorCode::ServiceUnavailable)? {
+        let entry = entry.context(ErrorCode::ServiceUnavailable)?;
+        let entry_metadata =
+            fs::symlink_metadata(entry.path()).context(ErrorCode::ServiceUnavailable)?;
+        if entry.file_name() != "foldsentinel-service.exe"
+            || !entry_metadata.is_file()
+            || has_reparse_point(&entry_metadata)
+        {
+            bail!(ErrorCode::ProtectionConflict);
+        }
+    }
+    Ok(binary)
+}
+
+fn remove_program_directory(directory: &Path, binary: &Path) -> Result<()> {
+    fs::remove_file(binary).context(ErrorCode::ServiceUnavailable)?;
+    if fs::read_dir(directory)
+        .context(ErrorCode::ServiceUnavailable)?
+        .next()
+        .transpose()
+        .context(ErrorCode::ServiceUnavailable)?
+        .is_some()
+    {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    fs::remove_dir(directory).context(ErrorCode::ServiceUnavailable)?;
+    if directory.exists() {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    Ok(())
+}
+
+fn stopped_status_allows_uninstall(
+    state: u32,
+    exit_code: u32,
+    service_exit_code: u32,
+    forced: bool,
+) -> Result<bool> {
+    if state != SERVICE_STOPPED {
+        return Ok(false);
+    }
+    if !forced && (exit_code != NO_ERROR || service_exit_code != NO_ERROR) {
+        bail!(ErrorCode::Recovery);
+    }
+    Ok(true)
+}
+
+fn wait_service_stopped(handle: SC_HANDLE, forced: bool) -> Result<SERVICE_STATUS_PROCESS> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let status = service_status(handle)?;
+        if stopped_status_allows_uninstall(
+            status.dwCurrentState,
+            status.dwWin32ExitCode,
+            status.dwServiceSpecificExitCode,
+            forced,
+        )? {
+            if forced
+                && (status.dwWin32ExitCode != NO_ERROR
+                    || status.dwServiceSpecificExitCode != NO_ERROR)
+            {
+                eprintln!(
+                    "强制卸载：服务已停止，但退出报告有错误（Win32={}，Service={}），文件保护可能遗留；ProgramData恢复资料保留。",
+                    status.dwWin32ExitCode, status.dwServiceSpecificExitCode
+                );
+            }
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            bail!(ErrorCode::ServiceUnavailable);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn wait_service_absent(manager: SC_HANDLE) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let handle =
+            unsafe { OpenServiceW(manager, wide(SERVICE_NAME).as_ptr(), SERVICE_QUERY_STATUS) };
+        if handle.is_null() {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) {
+                return Ok(());
+            }
+            if error.raw_os_error() == Some(ERROR_SERVICE_MARKED_FOR_DELETE as i32) {
+                if Instant::now() >= deadline {
+                    bail!(ErrorCode::ServiceUnavailable);
+                }
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            return Err(error).context(ErrorCode::ServiceUnavailable);
+        }
+        unsafe { CloseServiceHandle(handle) };
+        if Instant::now() >= deadline {
+            bail!(ErrorCode::ServiceUnavailable);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn restore_running_after_rejected_uninstall(handle: SC_HANDLE) -> Result<()> {
+    let status = service_status(handle)?;
+    if status.dwCurrentState == SERVICE_RUNNING {
+        return Ok(());
+    }
+    if status.dwCurrentState != SERVICE_STOPPED {
+        bail!("卸载被拒绝，但服务尚未停止，无法恢复持续防护");
+    }
+    unsafe {
+        checked(StartServiceW(handle, 0, null()))?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match service_status(handle)?.dwCurrentState {
+            SERVICE_RUNNING => return Ok(()),
+            SERVICE_START_PENDING if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(250));
+            }
+            _ => bail!("卸载被拒绝，持续防护服务未能重新运行，请检查服务状态"),
+        }
+    }
+}
+
+pub(super) fn uninstall_empty() -> Result<()> {
+    uninstall_service(false)
+}
+
+pub(super) fn uninstall_forced() -> Result<()> {
+    uninstall_service(true)
+}
+
+fn normal_stop_required(
+    state: u32,
+    audit: impl FnOnce() -> Result<Option<UninstallAudit>>,
+) -> Result<bool> {
+    match state {
+        SERVICE_STOPPED => Ok(false),
+        SERVICE_RUNNING => {
+            let audit = audit()?.context("服务已运行但无法核验全账户受管项目")?;
+            if audit.registered != 0 || audit.has_errors {
+                bail!("仍有服务受管项目或审计异常，请先在软件中解除保护再卸载");
+            }
+            Ok(true)
+        }
+        _ => bail!("服务正在转换状态，尚未停止或运行，请稍后重试"),
+    }
+}
+
+fn uninstall_service(forced: bool) -> Result<()> {
+    require_administrator()?;
+    let directory = program_files_directory()?;
+    let binary = verify_program_directory(&directory)?;
+    let manager = unsafe { OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT) };
+    if manager.is_null() {
+        return Err(std::io::Error::last_os_error()).context(ErrorCode::ServiceUnavailable);
+    }
+    let manager_guard = IdentityServiceHandle(manager);
+    let service = unsafe {
+        OpenServiceW(
+            manager_guard.0,
+            wide(SERVICE_NAME).as_ptr(),
+            SERVICE_QUERY_CONFIG
+                | SERVICE_QUERY_STATUS
+                | SERVICE_START
+                | SERVICE_STOP_ACCESS
+                | DELETE,
+        )
+    };
+    if service.is_null() {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) {
+            bail!(ErrorCode::ServiceUnavailable);
+        }
+        return Err(error).context(ErrorCode::ServiceUnavailable);
+    }
+    let service_guard = IdentityServiceHandle(service);
+    let expected = format!("\"{}\"", binary.display());
+    let registered = service_binary_path(service_guard.0)?;
+    if !registered.eq_ignore_ascii_case(&expected) {
+        bail!(ErrorCode::ProtectionConflict);
+    }
+    let status = service_status(service_guard.0)?;
+    let should_stop = if forced {
+        match status.dwCurrentState {
+            SERVICE_STOPPED | SERVICE_STOP_PENDING => false,
+            SERVICE_RUNNING => true,
+            _ => bail!("服务正在转换状态，拒绝删除"),
+        }
+    } else {
+        // 删除前先核验，不能因普通卸载被保护记录阻止而关闭持续防护。
+        normal_stop_required(status.dwCurrentState, super::uninstall_audit)?
+    };
+    let stopped_audit = (|| -> Result<()> {
+        if should_stop {
+            let mut requested: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+            unsafe {
+                checked(ControlService(
+                    service_guard.0,
+                    SERVICE_CONTROL_STOP,
+                    &mut requested,
+                ))?;
+            }
+        }
+        wait_service_stopped(service_guard.0, forced)?;
+        if !forced {
+            // 停止后重新读取所有账户，覆盖在线审计与停止之间的新登记。
+            let audit = ProcessCommand::new(&binary)
+                .arg("--audit-empty")
+                .status()
+                .context(ErrorCode::ServiceUnavailable)?;
+            if !audit.success() {
+                bail!(ErrorCode::ProtectionConflict);
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = stopped_audit {
+        if !forced && should_stop {
+            return match restore_running_after_rejected_uninstall(service_guard.0) {
+                Ok(()) => Err(error).context("服务卸载已拒绝，原运行中的持续防护已重新启动"),
+                Err(restart) => {
+                    Err(error).context(format!("服务卸载已拒绝，恢复运行也失败：{restart:#}"))
+                }
+            };
+        }
+        return Err(error);
+    }
+    unsafe {
+        checked(DeleteService(service_guard.0))?;
+    }
+    drop(service_guard);
+    wait_service_absent(manager_guard.0)?;
+    remove_program_directory(&directory, &binary)
 }
 fn valid_sid(sid: &str) -> bool {
     if !sid.starts_with("S-1-")
@@ -749,6 +1114,13 @@ impl Stores {
     fn all_empty(&self) -> bool {
         self.stores.values().all(|store| store.list().is_empty())
     }
+    fn uninstall_audit(&self) -> UninstallAudit {
+        let roots: Vec<_> = self.stores.values().flat_map(ManagedStore::list).collect();
+        UninstallAudit {
+            registered: roots.len(),
+            has_errors: roots.iter().any(|root| root.last_error.is_some()),
+        }
+    }
 }
 fn sweep_failed(report: &crate::managed::SweepReport) -> Result<bool> {
     Ok(report.failed > 0)
@@ -767,6 +1139,10 @@ impl Backend for Stores {
     ) -> Result<Value> {
         if client.state_dir != self.root.join(&client.sid) {
             bail!(ErrorCode::PermissionDenied);
+        }
+        // 与登记和后台核验共用宿主互斥锁；不加载/创建请求账户，不返回跨账户明细。
+        if let Command::UninstallAudit = command {
+            return Ok(serde_json::to_value(self.uninstall_audit())?);
         }
         if let Command::CheckLocal { path } = command {
             if !valid_local_check_path(path) {
@@ -803,6 +1179,7 @@ impl Backend for Stores {
         }
         let store = self.load(&client.sid)?;
         match command {
+            Command::UninstallAudit => unreachable!("UninstallAudit必须在load前处理"),
             Command::CheckLocal { .. } => unreachable!("CheckLocal必须在load前处理"),
             Command::Status => {
                 Ok(serde_json::json!({ "registered": store.list().len(), "roots": store.list() }))
@@ -1032,10 +1409,15 @@ pub(super) fn run_console(
 }
 pub(super) fn audit_empty() -> Result<()> {
     let directory = default_directory()?;
-    if !directory.exists() {
-        return Ok(());
+    audit_directory_empty(&directory, SYSTEM_SID)
+}
+fn audit_directory_empty(directory: &Path, owner: &str) -> Result<()> {
+    match fs::symlink_metadata(directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("无法核对服务恢复目录，拒绝卸载"),
     }
-    let stores = Stores::open(directory, SYSTEM_SID.to_owned(), false)?;
+    let stores = Stores::open(directory.to_owned(), owner.to_owned(), false)?;
     if !stores.all_empty() {
         bail!("仍有受管项目。请先验证密码并解除全部账户的服务保护，再卸载服务。");
     }
@@ -1155,6 +1537,62 @@ pub(super) fn run_service() -> Result<()> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn forced_uninstall_accepts_error_exit_only_after_service_is_confirmed_stopped() {
+        for (exit, specific) in [(0, 0), (1066, 0), (0, 1), (1066, 1)] {
+            assert!(
+                stopped_status_allows_uninstall(SERVICE_STOPPED, exit, specific, true).unwrap()
+            );
+            if exit == 0 && specific == 0 {
+                assert!(
+                    stopped_status_allows_uninstall(SERVICE_STOPPED, exit, specific, false)
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    stopped_status_allows_uninstall(SERVICE_STOPPED, exit, specific, false)
+                        .is_err()
+                );
+            }
+            for state in [SERVICE_RUNNING, SERVICE_STOP_PENDING, SERVICE_START_PENDING] {
+                assert!(!stopped_status_allows_uninstall(state, exit, specific, true).unwrap());
+                assert!(!stopped_status_allows_uninstall(state, exit, specific, false).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn normal_uninstall_refuses_to_stop_protected_or_uncertain_running_service() {
+        assert!(
+            normal_stop_required(SERVICE_STOPPED, || panic!("已停止服务直接离线审计"))
+                .is_ok_and(|stop| !stop)
+        );
+        assert!(
+            normal_stop_required(SERVICE_RUNNING, || Ok(Some(UninstallAudit {
+                registered: 0,
+                has_errors: false,
+            })))
+            .is_ok_and(|stop| stop)
+        );
+        for audit in [
+            None,
+            Some(UninstallAudit {
+                registered: 1,
+                has_errors: false,
+            }),
+            Some(UninstallAudit {
+                registered: 0,
+                has_errors: true,
+            }),
+        ] {
+            assert!(normal_stop_required(SERVICE_RUNNING, || Ok(audit)).is_err());
+        }
+        assert!(normal_stop_required(SERVICE_RUNNING, || bail!("管道断开")).is_err());
+        for state in [SERVICE_START_PENDING, SERVICE_STOP_PENDING, SERVICE_PAUSED] {
+            assert!(normal_stop_required(state, || panic!("转换状态不能停止或审计")).is_err());
+        }
+    }
 
     fn test_pipe() -> String {
         let nonce: u64 = rand::random();
@@ -1356,6 +1794,88 @@ mod tests {
         );
         assert!(!stores.stores.contains_key(&sid));
         assert!(!stores.root.join(&sid).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_audit_covers_other_accounts_and_preserves_recovery_state() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let sid = process_sid()?;
+        let other_sid = "S-1-5-21-100-200-300-401";
+        let directory = fixture.path().join("state");
+        let absent = fixture.path().join("absent");
+        audit_directory_empty(&absent, &sid)?;
+        assert!(!absent.exists(), "审计不存在目录不能创建恢复状态");
+        let mut stores = Stores::open(directory.clone(), sid.clone(), false)?;
+        let target = fixture.path().join("registered-root");
+        fs::create_dir(&target)?;
+        let authorization = authorize_tree(&target)?;
+        stores.load(other_sid)?.enroll_authorized(
+            &target,
+            ProtectionMode::ReadonlyAcl,
+            "",
+            None,
+            authorization.paths(),
+        )?;
+        drop(authorization);
+        let root_id = stores.stores[other_sid].list()[0].id.clone();
+        stores
+            .stores
+            .get_mut(other_sid)
+            .unwrap()
+            .set_monitoring(&root_id, false, None)?;
+        let client = ClientContext {
+            sid: sid.clone(),
+            state_dir: directory.join(&sid),
+        };
+        let audit = stores.handle(&client, &Command::UninstallAudit, None)?;
+        assert_eq!(
+            audit,
+            serde_json::json!({"registered":1,"has_errors":false})
+        );
+        assert!(!stores.stores.contains_key(&sid));
+        assert!(!directory.join(&sid).exists(), "全局审计不加载请求账户");
+        assert!(
+            audit_directory_empty(&directory, &sid).is_err(),
+            "持锁状态不能被另一个进程当空"
+        );
+        drop(stores);
+        assert!(
+            audit_directory_empty(&directory, &sid).is_err(),
+            "已停监控仍有保护记录"
+        );
+        let mut stores = Stores::open(directory.clone(), sid.clone(), false)?;
+        stores
+            .stores
+            .get_mut(other_sid)
+            .unwrap()
+            .set_monitoring(&root_id, true, None)?;
+        let moved = fixture.path().join("temporarily-moved");
+        fs::rename(&target, &moved)?;
+        assert!(stores.tick().is_err());
+        let error_audit = stores.handle(&client, &Command::UninstallAudit, None)?;
+        fs::rename(&moved, &target)?;
+        let store = stores.stores.get_mut(other_sid).unwrap();
+        for root in store.list() {
+            store.restore(&root.id, None)?;
+        }
+        assert_eq!(
+            error_audit,
+            serde_json::json!({"registered":1,"has_errors":true})
+        );
+        drop(stores);
+        audit_directory_empty(&directory, &sid)?;
+        let state = directory.join(other_sid).join("managed.json");
+        let bytes = fs::read(&state)?;
+        fs::write(&state, b"broken state")?;
+        assert!(audit_directory_empty(&directory, &sid).is_err());
+        assert_eq!(fs::read(&state)?, b"broken state", "审计失败不覆盖恢复状态");
+        fs::write(&state, bytes)?;
+        fs::write(directory.join("unexpected-file"), b"unknown")?;
+        assert!(
+            audit_directory_empty(&directory, &sid).is_err(),
+            "未知根目录内容不能静默忽略"
+        );
         Ok(())
     }
 

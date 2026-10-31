@@ -20,12 +20,18 @@ struct Arguments {
     /// 卸载前核对所有账户均无受管项目；不会解除保护
     #[arg(long, conflicts_with = "console")]
     audit_empty: bool,
+    /// 管理员执行完整正常卸载；仅删除固定服务程序文件，保留ProgramData恢复资料
+    #[arg(long, conflicts_with_all = ["console", "audit_empty"])]
+    uninstall_empty: bool,
 }
 
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
     if arguments.audit_empty {
         return service::audit_empty();
+    }
+    if arguments.uninstall_empty {
+        return service::uninstall_empty();
     }
     if arguments.console {
         let Some(path) = arguments.state_dir else {
