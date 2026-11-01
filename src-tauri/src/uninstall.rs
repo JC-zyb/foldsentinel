@@ -226,7 +226,7 @@ fn prepare(args: &Args) -> Result<i32> {
 fn audit_normal(data_dir: &Path, silent: bool) -> Result<()> {
     let cache = cache_dir()?;
     cache_entries(&cache)?;
-    audit_local(data_dir, &scan_roots()?)?;
+    audit_local(data_dir)?;
     if service::is_installed()? {
         ensure!(
             elevate_service_remove(false, silent) == EXIT_OK,
@@ -236,7 +236,7 @@ fn audit_normal(data_dir: &Path, silent: bool) -> Result<()> {
     Ok(())
 }
 
-fn audit_local(data_dir: &Path, roots: &[PathBuf]) -> Result<()> {
+fn audit_local(data_dir: &Path) -> Result<()> {
     metadata_entries(data_dir)?;
     let store = StateStore::load_for_uninstall(data_dir.join("state.json"))?;
     ensure!(
@@ -251,25 +251,25 @@ fn audit_local(data_dir: &Path, roots: &[PathBuf]) -> Result<()> {
         jobs.len()
     );
 
-    let discovery = vault::inventory::discover(roots, data_dir)?;
-    ensure!(
-        discovery.complete && discovery.issues.is_empty(),
-        "旧加密包扫描未完整完成（{} 个问题）：{}",
-        discovery.issues.len(),
-        discovery
-            .issues
-            .iter()
-            .take(3)
-            .map(|issue| format!("{}: {}", issue.path.display(), issue.detail))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    check_registered_assets(data_dir)
+}
+
+fn check_registered_assets(data_dir: &Path) -> Result<()> {
+    match fs::symlink_metadata(data_dir.join(vault::inventory::INDEX_FILE)) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // 没有资产索引表示尚无软件登记；不扫描其他目录推断或补齐旧包。
+            // 只有状态目录仍明确可读时才接受缺失，避免离线位置冒充空登记。
+            fs::read_dir(data_dir).context("无法确认加密资产登记目录可读")?;
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("无法读取加密资产登记状态"),
+    }
     let assets = vault::inventory::snapshot(data_dir)?;
     ensure!(
         assets.iter().all(|asset| !asset.requires_restore()),
         "仍有加密项目未解密，或解密后的文件无法确认存在"
     );
-
     Ok(())
 }
 
@@ -311,43 +311,6 @@ fn cache_dir() -> Result<PathBuf> {
     Ok(known_folder(&FOLDERID_LocalAppData)?.join("io.github.jc-zyb.foldsentinel"))
 }
 
-#[cfg(windows)]
-fn scan_roots() -> Result<Vec<PathBuf>> {
-    use windows_sys::Win32::UI::Shell::{FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads};
-    // KnownFolder 返回重定向后的实际目录，包括用户配置的 OneDrive 位置。
-    let candidates = vec![
-        known_folder(&FOLDERID_Desktop)?,
-        known_folder(&FOLDERID_Documents)?,
-        known_folder(&FOLDERID_Downloads)?,
-        lifecycle::default_data_dir()?,
-        cache_dir()?,
-    ];
-    let mut roots = BTreeSet::new();
-    for candidate in candidates {
-        ensure!(candidate.is_absolute(), "旧包扫描目录不是绝对路径");
-        let metadata = match fs::symlink_metadata(&candidate) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // 只有父目录明确可读时，才把尚未创建的标准目录视为空。
-                // 离线卷或不可访问的重定向父路径不能冒充“没有旧包”。
-                fs::read_dir(candidate.parent().context("扫描目录缺少父路径")?)
-                    .context("旧包扫描目录的父路径不可访问")?;
-                continue;
-            }
-            Err(error) => return Err(error).context("无法读取旧包扫描目录"),
-        };
-        ensure!(metadata.is_dir(), "旧包扫描路径不是目录");
-        ensure_plain(&candidate)?;
-        roots.insert(fs::canonicalize(candidate)?);
-    }
-    ensure!(!roots.is_empty(), "没有可检查的旧包扫描目录");
-    Ok(roots.into_iter().collect())
-}
-
-#[cfg(not(windows))]
-fn scan_roots() -> Result<Vec<PathBuf>> {
-    bail!("卸载仅支持 Windows")
-}
 #[cfg(not(windows))]
 fn cache_dir() -> Result<PathBuf> {
     bail!("卸载仅支持 Windows")
@@ -447,13 +410,7 @@ fn validate_local_state(data_dir: &Path) -> Result<()> {
         store.entries().next().is_none(),
         "仍有文件保护登记，拒绝清理恢复资料"
     );
-    ensure!(
-        vault::inventory::snapshot(data_dir)?
-            .iter()
-            .all(|asset| !asset.requires_restore()),
-        "加密资产仍需恢复，拒绝清理资产资料"
-    );
-    Ok(())
+    check_registered_assets(data_dir)
 }
 
 fn metadata_entries(data_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -621,15 +578,10 @@ mod tests {
     }
 
     #[test]
-    fn scanning_own_state_with_live_locks_still_checks_packages_and_unknown_metadata() {
+    fn only_explicit_discovery_registers_old_packages_and_still_handles_live_locks() {
         let (root, data, inputs, _cache) = fixture();
         let roots = [data.clone(), inputs.clone()];
         let guard = lifecycle::UninstallGuard::acquire(&data).unwrap();
-        audit_local(&data, &roots).unwrap();
-        for name in ["lifecycle.lock", "state.lock", "vault-inventory.lock"] {
-            assert_eq!(fs::metadata(data.join(name)).unwrap().len(), 0);
-        }
-
         let source = inputs.join("source");
         let package = inputs.join("old-renamed.bin");
         let restored = inputs.join("restored");
@@ -637,8 +589,17 @@ mod tests {
         let old_control =
             vault::Control::with_recovery_dir(root.path().join("old-data/jobs"), |_| {});
         vault::encrypt_with_control(&source, &package, "test", &old_control).unwrap();
+        audit_local(&data).unwrap();
+        assert!(!data.join(vault::inventory::INDEX_FILE).exists());
+
+        let discovery = vault::inventory::discover(&roots, &data).unwrap();
+        assert!(discovery.complete && discovery.issues.is_empty());
+        assert_eq!(discovery.discovered_packages, 1);
+        for name in ["lifecycle.lock", "state.lock", "vault-inventory.lock"] {
+            assert_eq!(fs::metadata(data.join(name)).unwrap().len(), 0);
+        }
         assert!(
-            audit_local(&data, &roots)
+            audit_local(&data)
                 .unwrap_err()
                 .to_string()
                 .contains("未解密")
@@ -651,11 +612,11 @@ mod tests {
         let control = vault::Control::with_recovery_dir(data.join("jobs"), |_| {});
         vault::decrypt_with_control(&package, &restored, "test", &control).unwrap();
         let _guard = lifecycle::UninstallGuard::acquire(&data).unwrap();
-        audit_local(&data, &roots).unwrap();
+        audit_local(&data).unwrap();
         let unknown = data.join("unknown-empty-file");
         fs::write(&unknown, []).unwrap();
         assert!(
-            audit_local(&data, &roots)
+            audit_local(&data)
                 .unwrap_err()
                 .to_string()
                 .contains("未知文件")
@@ -666,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn old_packages_require_real_restore_and_normal_finish_removes_only_app_data() {
+    fn registered_packages_require_real_restore_and_normal_finish_removes_only_app_data() {
         let (_root, data, inputs, cache) = fixture();
         let source = inputs.join("source");
         let package = inputs.join("old-renamed.bin");
@@ -674,9 +635,9 @@ mod tests {
         fs::write(&source, b"original content").unwrap();
         let control = || vault::Control::with_recovery_dir(data.join("jobs"), |_| {});
         vault::encrypt_with_control(&source, &package, "test", &control()).unwrap();
-        assert!(audit_local(&data, std::slice::from_ref(&inputs)).is_err());
+        assert!(audit_local(&data).is_err());
         vault::decrypt_with_control(&package, &restored, "test", &control()).unwrap();
-        audit_local(&data, std::slice::from_ref(&inputs)).unwrap();
+        audit_local(&data).unwrap();
         fs::create_dir_all(cache.join("EBWebView/Default")).unwrap();
         fs::write(cache.join("EBWebView/Default/Preferences"), b"app settings").unwrap();
         let args = arm(&data, false);
@@ -692,17 +653,113 @@ mod tests {
     }
 
     #[test]
-    fn unknown_metadata_jobs_and_invalid_registry_block_before_removal() {
+    fn missing_inventory_is_empty_but_corrupt_inventory_blocks_uninstall() {
+        let (_root, data, _inputs, cache) = fixture();
+        audit_local(&data).unwrap();
+        let index = data.join(vault::inventory::INDEX_FILE);
+        assert!(!index.exists());
+        fs::write(&index, b"broken inventory").unwrap();
+        assert!(audit_local(&data).is_err());
+        assert!(validate_local_state(&data).is_err());
+        assert_eq!(fs::read(&index).unwrap(), b"broken inventory");
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+
+            fs::write(&index, br#"{"version":1,"assets":{}}"#).unwrap();
+            let _busy = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&index)
+                .unwrap();
+            assert!(audit_local(&data).is_err());
+            assert!(validate_local_state(&data).is_err());
+        }
+        fs::remove_file(&index).unwrap();
+
+        let args = arm(&data, false);
+        assert_eq!(
+            finish_at(&args, &data, &cache, || Ok(false)).unwrap(),
+            EXIT_OK
+        );
+        assert!(!data.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unregistered_external_junctions_and_unreadable_files_do_not_affect_uninstall() {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+        let (root, data, inputs, _cache) = fixture();
+        let target = root.path().join("outside-target");
+        fs::create_dir(&target).unwrap();
+        let target_file = target.join("unregistered-package");
+        fs::write(&target_file, b"FSEAL002").unwrap();
+        let junction = inputs.join("unknown-junction");
+        let output = std::process::Command::new("cmd")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_ne!(
+            fs::symlink_metadata(&junction).unwrap().file_attributes() & 0x400,
+            0
+        );
+        let busy = inputs.join("busy-package");
+        fs::write(&busy, b"FSEAL002").unwrap();
+        let _busy_handle = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&busy)
+            .unwrap();
+        let _guard = lifecycle::UninstallGuard::acquire(&data).unwrap();
+        audit_local(&data).unwrap();
+        assert!(!data.join(vault::inventory::INDEX_FILE).exists());
+        assert_eq!(fs::read(&target_file).unwrap(), b"FSEAL002");
+        fs::remove_dir(&junction).unwrap();
+        assert!(target_file.exists());
+    }
+
+    #[test]
+    fn restored_output_loss_or_replacement_still_blocks_registered_assets() {
         let (_root, data, inputs, _cache) = fixture();
+        let source = inputs.join("source");
+        let package = inputs.join("registered-package");
+        let restored = inputs.join("restored");
+        fs::write(&source, b"original content").unwrap();
+        let control = || vault::Control::with_recovery_dir(data.join("jobs"), |_| {});
+        vault::encrypt_with_control(&source, &package, "test", &control()).unwrap();
+        vault::decrypt_with_control(&package, &restored, "test", &control()).unwrap();
+        // 完成恢复后可删除原密文包，但恢复输出仍须存在且保持原对象身份。
+        fs::remove_file(&package).unwrap();
+        audit_local(&data).unwrap();
+        let moved = inputs.join("moved-restored");
+        fs::rename(&restored, &moved).unwrap();
+        assert!(audit_local(&data).is_err());
+        fs::write(&restored, b"replacement").unwrap();
+        assert!(audit_local(&data).is_err());
+        assert_eq!(fs::read(&moved).unwrap(), b"original content");
+    }
+
+    #[test]
+    fn unknown_metadata_jobs_and_invalid_registry_block_before_removal() {
+        let (_root, data, _inputs, _cache) = fixture();
         for path in [data.join("unknown.txt"), data.join("jobs/partial.bin")] {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"preserve").unwrap();
-            assert!(audit_local(&data, std::slice::from_ref(&inputs)).is_err());
+            assert!(audit_local(&data).is_err());
             assert_eq!(fs::read(&path).unwrap(), b"preserve");
             fs::remove_file(path).unwrap();
         }
         fs::write(data.join("state.json"), b"broken").unwrap();
-        assert!(audit_local(&data, std::slice::from_ref(&inputs)).is_err());
+        assert!(audit_local(&data).is_err());
     }
 
     #[test]
@@ -712,7 +769,7 @@ mod tests {
         let json = serde_json::json!({"version":1,"entries":{&path:{"path":&path,"mode":"hidden","original_attributes":32}}});
         fs::write(data.join("state.json"), serde_json::to_vec(&json).unwrap()).unwrap();
         assert!(
-            audit_local(&data, &[inputs])
+            audit_local(&data)
                 .unwrap_err()
                 .to_string()
                 .contains("文件保护")
@@ -745,8 +802,13 @@ mod tests {
 
     #[test]
     fn changed_state_or_service_at_finish_preserves_recovery_records() {
-        let (_root, data, inputs, cache) = fixture();
-        audit_local(&data, &[inputs]).unwrap();
+        let (_root, data, _inputs, cache) = fixture();
+        fs::write(
+            data.join(vault::inventory::INDEX_FILE),
+            br#"{"version":1,"assets":{}}"#,
+        )
+        .unwrap();
+        audit_local(&data).unwrap();
         let args = arm(&data, false);
         assert!(finish_at(&args, &data, &cache, || Ok(true)).is_err());
         assert!(data.join("vault-inventory.json").exists());
