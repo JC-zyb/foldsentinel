@@ -621,6 +621,51 @@ mod tests {
     }
 
     #[test]
+    fn scanning_own_state_with_live_locks_still_checks_packages_and_unknown_metadata() {
+        let (root, data, inputs, _cache) = fixture();
+        let roots = [data.clone(), inputs.clone()];
+        let guard = lifecycle::UninstallGuard::acquire(&data).unwrap();
+        audit_local(&data, &roots).unwrap();
+        for name in ["lifecycle.lock", "state.lock", "vault-inventory.lock"] {
+            assert_eq!(fs::metadata(data.join(name)).unwrap().len(), 0);
+        }
+
+        let source = inputs.join("source");
+        let package = inputs.join("old-renamed.bin");
+        let restored = inputs.join("restored");
+        fs::write(&source, b"original content").unwrap();
+        let old_control =
+            vault::Control::with_recovery_dir(root.path().join("old-data/jobs"), |_| {});
+        vault::encrypt_with_control(&source, &package, "test", &old_control).unwrap();
+        assert!(
+            audit_local(&data, &roots)
+                .unwrap_err()
+                .to_string()
+                .contains("未解密")
+        );
+        let assets = vault::inventory::snapshot(&data).unwrap();
+        assert_eq!(assets.len(), 1);
+        assert!(assets[0].requires_restore());
+        drop(guard);
+
+        let control = vault::Control::with_recovery_dir(data.join("jobs"), |_| {});
+        vault::decrypt_with_control(&package, &restored, "test", &control).unwrap();
+        let _guard = lifecycle::UninstallGuard::acquire(&data).unwrap();
+        audit_local(&data, &roots).unwrap();
+        let unknown = data.join("unknown-empty-file");
+        fs::write(&unknown, []).unwrap();
+        assert!(
+            audit_local(&data, &roots)
+                .unwrap_err()
+                .to_string()
+                .contains("未知文件")
+        );
+        assert!(unknown.exists());
+        assert_eq!(fs::read(&restored).unwrap(), b"original content");
+        assert!(package.exists());
+    }
+
+    #[test]
     fn old_packages_require_real_restore_and_normal_finish_removes_only_app_data() {
         let (_root, data, inputs, cache) = fixture();
         let source = inputs.join("source");

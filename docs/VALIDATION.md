@@ -1,8 +1,10 @@
 # 验证记录
 
-## v0.8.0 卸载安全门 — 2026-10-31（本机验证）
+## v0.8.0 卸载安全门 — 2026-11-01（本机验证）
 
-本轮源码增加独立加密资产清单、恢复输出根对象身份核对、跨进程卸载操作门、NSIS 删除前/后钩子、交互式中英强制卸载免责声明及全账户服务空审计。版本来源已更新为 0.8.0；v1/v2 加密格式不变。最终 `cargo test --workspace --locked` 全部通过：核心 100 项、实际 IO 集成 1 项及桌面 16 项，共 117 项；前端 17 项、版本检查、TypeScript/Vite 构建、Rustfmt 与 Clippy 全目标 `-D warnings` 已通过。不沿用下方 v0.7.0 的通过数字。
+本轮源码增加独立加密资产清单、恢复输出根对象身份核对、跨进程卸载操作门、NSIS 删除前/后钩子、交互式中英强制卸载免责声明及全账户服务空审计。版本来源已更新为 0.8.0；v1/v2 加密格式不变。最终 `cargo test --workspace --locked` 全部通过：核心 102 项、实际 IO 集成 1 项及桌面 17 项，共 120 项；前端 17 项、版本检查、TypeScript/Vite 构建、Rustfmt 与 Clippy 全目标 `-D warnings` 已通过。不沿用下方 v0.7.0 的通过数字。
+
+首次远端安装卸载检查返回 20，[诊断运行 41208687285](https://github.com/JC-zyb/foldsentinel/actions/runs/41208687285) 确认旧包扫描重新打开正在持有的三个空锁文件，导致 Windows 共享冲突（os error 32）。修复前的隔离回归复现相同错误；修复仅对已确认普通且为零字节的文件判定没有包头，不按 `.lock` 名称跳过或吞掉非空文件读取错误。新增回归覆盖持有真实卸载门并扫描自身数据目录、非空文件占用、伪装为 `.lock` 的真实包和截断魔数、发现旧包后必须由软件解密，以及未知零字节元数据继续拒绝。
 
 本地 release GUI、CLI、服务程序及 NSIS 安装包已构建。`artifacts/0.8.0/` 包含 `FoldSentinel_0.8.0_x64-setup.exe`、`FoldSentinel_0.8.0_windows-x64_portable.zip` 与 `SHA256SUMS.txt`；便携包必需文件、路径和 SHA-256 已通过 `scripts/verify-artifacts.ps1` 检查。这些是本地交付产物，不代表远程 CI 或 Release 已发布。
 

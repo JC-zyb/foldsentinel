@@ -296,6 +296,13 @@ fn validate(index: &Index) -> Result<()> {
 
 fn read_fingerprint(path: &Path) -> Result<Option<String>> {
     super::reject_link(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    ensure!(metadata.is_file(), "加密包不是普通文件");
+    // 空文件不可能包含包魔数；不为识别它重新打开正在持有的零字节操作锁。
+    // 非空文件仍须通过原有稳定读取，不能按文件名跳过或吞掉共享/权限错误。
+    if metadata.len() == 0 {
+        return Ok(None);
+    }
     let mut file = super::open_stable(path)?;
     ensure!(file.metadata()?.is_file(), "加密包不是普通文件");
     let mut magic = [0; 8];
@@ -677,6 +684,49 @@ mod tests {
         let mut file = File::create(path).unwrap();
         file.write_all(&header).unwrap();
         file.sync_all().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_busy_files_are_not_packages_but_nonempty_busy_files_still_fail() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let inputs = root.path().join("inputs");
+        let data = root.path().join("data");
+        fs::create_dir(&inputs).unwrap();
+        let path = inputs.join("arbitrary-name.bin");
+        fs::write(&path, []).unwrap();
+        let busy = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(3)
+                .open(&path)
+                .unwrap()
+        };
+        let handle = busy();
+        assert_eq!(read_fingerprint(&path).unwrap(), None);
+        let report = discover(std::slice::from_ref(&inputs), &data).unwrap();
+        assert!(report.complete && report.issues.is_empty());
+        drop(handle);
+
+        fs::write(&path, b"x").unwrap();
+        let _handle = busy();
+        assert!(read_fingerprint(&path).is_err());
+        let report = discover(&[inputs], &data).unwrap();
+        assert!(!report.complete);
+        assert_eq!(report.issues.len(), 1);
+    }
+
+    #[test]
+    fn lock_suffix_does_not_hide_packages_or_truncated_magic() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("package.lock");
+        package(&path, b"FSEAL002");
+        assert!(read_fingerprint(&path).unwrap().is_some());
+        fs::write(&path, b"FSEAL002").unwrap();
+        assert!(read_fingerprint(&path).is_err());
     }
 
     #[test]

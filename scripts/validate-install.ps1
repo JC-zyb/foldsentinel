@@ -29,7 +29,7 @@ function Run-Installer([string]$Path, [string]$Arguments, [int]$ExpectedExit = 0
     if (-not $process.WaitForExit(180000)) { $process.Kill(); throw '安装器运行超时' }
     if ($process.ExitCode -ne $ExpectedExit) {
         if ($ExpectedExit -eq 0 -and $process.ExitCode -eq 20 -and [IO.Path]::GetFileName($Path).StartsWith('uninstall-runner-', [StringComparison]::Ordinal)) {
-            # GUI helper 没有控制台；仅在一次性 runner 的失败分支重放只读预检，
+            # GUI helper 没有控制台；仅在一次性 runner 的失败分支重跑删除前预检，
             # 显式重定向 stderr，区分产品安全门拒绝与夹具环境异常。
             $diagnostic = Join-Path $owned ('uninstall-preflight-' + [Guid]::NewGuid().ToString('N') + '.stderr.txt')
             $probe = Start-Process -FilePath (Join-Path $install 'FoldSentinel.exe') -ArgumentList "--uninstall-prepare --parent-pid $PID --silent" -WindowStyle Hidden -RedirectStandardError $diagnostic -PassThru
