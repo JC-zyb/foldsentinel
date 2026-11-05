@@ -7,8 +7,11 @@ use std::sync::Mutex;
 use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
 mod attributes;
+mod service_setup;
+mod settings;
 mod support;
 mod uninstall;
+mod updates;
 
 #[derive(Default)]
 struct ActiveJob(Mutex<Option<vault::Control>>);
@@ -346,7 +349,62 @@ async fn managed_protection(
     .map_err(UiError::internal)?
 }
 
+#[tauri::command]
+async fn service_install() -> Result<service_setup::InstallReport, UiError> {
+    let guard = service_setup::acquire_install().map_err(UiError::vault)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        service_setup::install_from_ui(guard).map_err(UiError::vault)
+    })
+    .await
+    .map_err(UiError::internal)?
+}
+
+#[tauri::command]
+async fn service_installation_status() -> foldsentinel::service::ServiceInstallationState {
+    use foldsentinel::service::ServiceInstallationState;
+    match tauri::async_runtime::spawn_blocking(foldsentinel::service::installation_state).await {
+        Ok(Ok(state)) => state,
+        Ok(Err(error)) => {
+            eprintln!("无法读取保护服务安装状态：{error:#}");
+            ServiceInstallationState::Inaccessible
+        }
+        Err(error) => {
+            eprintln!("读取保护服务安装状态的后台任务失败：{error}");
+            ServiceInstallationState::Inaccessible
+        }
+    }
+}
+
+#[tauri::command]
+fn autostart_enabled() -> Result<bool, UiError> {
+    settings::autostart_enabled().map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn set_autostart_enabled(enabled: bool) -> Result<bool, UiError> {
+    settings::set_autostart_enabled(enabled)
+        .map(|()| enabled)
+        .map_err(UiError::internal)
+}
+
+#[tauri::command]
+async fn check_for_updates() -> Result<updates::UpdateCheck, updates::UpdateError> {
+    tauri::async_runtime::spawn_blocking(updates::check_for_updates)
+        .await
+        .map_err(|_| updates::UpdateError::Unavailable)?
+}
+
+#[tauri::command]
+async fn open_release_page(url: String) -> Result<(), updates::UpdateError> {
+    tauri::async_runtime::spawn_blocking(move || updates::open_release_page(&url))
+        .await
+        .map_err(|_| updates::UpdateError::Unavailable)?
+}
+
 fn main() {
+    if let Some(code) = service_setup::maybe_run() {
+        std::process::exit(code);
+    }
     if let Some(code) = uninstall::maybe_run() {
         std::process::exit(code);
     }
@@ -373,6 +431,8 @@ fn main() {
             open_output_folder,
             attribute_operation,
             managed_protection,
+            service_install,
+            service_installation_status,
             preview_protection_add,
             export_protection_backup,
             import_protection_backup,
@@ -382,7 +442,11 @@ fn main() {
             set_protection_mode,
             restore_attributes,
             review_restore_attributes,
-            restore_attributes_after_review
+            restore_attributes_after_review,
+            autostart_enabled,
+            set_autostart_enabled,
+            check_for_updates,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("FoldSentinel 桌面程序启动失败");

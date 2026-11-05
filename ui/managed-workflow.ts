@@ -7,6 +7,8 @@ export interface ServiceRoot {
 }
 export interface ServiceTransport { host: 'service'; healthy: boolean; last_tick_error: string | null }
 export interface ServiceStatus { registered: number; roots: ServiceRoot[] }
+export type ServiceInstallationState = 'absent' | 'stopped' | 'starting' | 'running' | 'stopping' | 'invalid' | 'inaccessible';
+export interface ServiceInstallResult { status: 'installed' | 'cancelled' }
 export type ManagedCommand =
   | { action: 'status' | 'list' }
   | { action: 'enroll'; path: string; mode: ManagedMode; note: string; password: string | null }
@@ -19,6 +21,16 @@ export type ManagedCommand =
 function failure(code = 'internal'): never { throw { code }; }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const errorCode = (value: unknown): value is string | null => value === null || (typeof value === 'string' && /^[a-z_]{1,64}$/.test(value));
+
+export function serviceInstallationState(value: unknown): ServiceInstallationState {
+  if (typeof value !== 'string' || !['absent', 'stopped', 'starting', 'running', 'stopping', 'invalid', 'inaccessible'].includes(value)) failure('service_unavailable');
+  return value as ServiceInstallationState;
+}
+
+export function serviceInstallResult(value: unknown): ServiceInstallResult {
+  if (!object(value) || (value.status !== 'installed' && value.status !== 'cancelled')) failure('service_unavailable');
+  return { status: value.status as ServiceInstallResult['status'] };
+}
 
 export function managedResponse(response: unknown): { transport: ServiceTransport; data: unknown } {
   if (!object(response) || response.version !== 1 || !object(response.transport)) failure();

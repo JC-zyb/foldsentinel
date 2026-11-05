@@ -15,6 +15,19 @@ pub const PIPE_NAME: &str = r"\\.\pipe\FoldSentinel.Protection.v1";
 pub const PROTOCOL_VERSION: u32 = 1;
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
+/// SCM 配置与状态；Running 不代表管道身份与业务响应已经通过验证。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceInstallationState {
+    Absent,
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Invalid,
+    Inaccessible,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -260,6 +273,44 @@ pub fn is_installed() -> Result<bool> {
     }
 }
 
+/// 卸载专用只读核对：包括已注销服务后尚未清理的固定程序目录。
+/// 无权读取受保护目录也需要提权清理，不得误报完整卸载。
+pub fn uninstall_required() -> Result<bool> {
+    #[cfg(windows)]
+    {
+        windows::service_uninstall_required()
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
+/// 只读查询固定服务，不安装、启动或读取受保护恢复资料。
+pub fn installation_state() -> Result<ServiceInstallationState> {
+    #[cfg(windows)]
+    {
+        windows::installation_state()
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
+/// 管理员部署编译时绑定的服务程序；已安装的兼容服务仅复用，不覆盖恢复资料。
+pub fn install_from(source: &Path, expected_sha256: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::install_from(source, expected_sha256)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (source, expected_sha256);
+        bail!(ErrorCode::ProtectionUnsupported)
+    }
+}
+
 /// 通过已鉴权的运行中服务读取全部账户登记总数。失联和旧协议不能当作无保护。
 pub fn uninstall_audit() -> Result<Option<UninstallAudit>> {
     uninstall_audit_using(is_installed, || {
@@ -269,6 +320,7 @@ pub fn uninstall_audit() -> Result<Option<UninstallAudit>> {
 
 /// 管理员执行一次正常服务卸载。运行中的服务先审计为空才停止，停止后再次审计。
 /// 只有全账户恢复审计为空且固定程序目录安全时才会删除。
+/// 服务已注销时，只重试清理固定程序目录，不清理 ProgramData 恢复资料。
 pub fn uninstall_empty() -> Result<()> {
     #[cfg(windows)]
     {

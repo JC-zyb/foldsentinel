@@ -143,6 +143,9 @@ FunctionEnd
 Section
   SetOutPath "$INSTDIR"
   File "@@HELPER@@"
+  FileOpen $0 "$INSTDIR\foldsentinel-service.exe" w
+  FileWrite $0 "owned service payload fixture"
+  FileClose $0
   FileOpen $0 "$INSTDIR\installed-marker" w
   FileWrite $0 "owned fixture file"
   FileClose $0
@@ -172,6 +175,7 @@ Section "Uninstall"
   FileClose $0
   Delete "$INSTDIR\installed-marker"
   Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+  Delete "$INSTDIR\foldsentinel-service.exe"
   Delete "$INSTDIR\uninstall.exe"
   ReadEnvStr $0 FOLDSENTINEL_HOOK_UNKNOWN_SHORTCUT
   ${If} $0 != 1
@@ -182,10 +186,6 @@ Section "Uninstall"
   ReadEnvStr $0 FOLDSENTINEL_HOOK_KEEP_REGISTRATION
   ${If} $0 != 1
     DeleteRegKey HKCU "${UNINSTKEY}"
-  ${EndIf}
-  ReadEnvStr $0 FOLDSENTINEL_HOOK_KEEP_RUN
-  ${If} $0 != 1
-    DeleteRegValue HKCU "${FOLDSENTINEL_UNINSTALL_RUN_KEY}" "${PRODUCTNAME}"
   ${EndIf}
   !insertmacro NSIS_HOOK_POSTUNINSTALL
   SetErrorLevel 0
@@ -232,10 +232,10 @@ $cases = @(
     @{ Name = 'finish-failed'; Prepare = 0; Finish = 31; Options = '/S'; Exit = 31; Delete = $true; Silent = $true },
     @{ Name = 'missing-helper'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 21; Delete = $false; Silent = $true; Missing = $true },
     @{ Name = 'main-exe-delete-denied'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 25; Delete = $true; Silent = $true; Lock = 'FoldSentinel.exe'; StopBeforeFinish = $true },
+    @{ Name = 'service-payload-delete-denied'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 25; Delete = $true; Silent = $true; Lock = 'foldsentinel-service.exe'; StopBeforeFinish = $true },
     @{ Name = 'uninstaller-delete-denied'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 25; Delete = $true; Silent = $true; Lock = 'uninstall.exe'; StopBeforeFinish = $true },
     @{ Name = 'shortcut-delete-denied'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 27; Delete = $true; Silent = $true; Lock = 'desktop.lnk'; StopBeforeFinish = $true },
     @{ Name = 'uninstall-registration-remains'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 26; Delete = $true; Silent = $true; KeepRegistration = '1'; StopBeforeFinish = $true },
-    @{ Name = 'autostart-registration-remains'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 26; Delete = $true; Silent = $true; KeepRun = '1'; StopBeforeFinish = $true },
     @{ Name = 'unknown-shortcut-retained'; Prepare = 0; Finish = 0; Options = '/S'; Exit = 0; Delete = $true; Silent = $true; UnknownShortcut = '1' }
 )
 $results = @()
@@ -247,7 +247,6 @@ foreach ($case in $cases) {
         FOLDSENTINEL_HOOK_FINISH_EXIT = [string]$case['Finish']
         FOLDSENTINEL_HOOK_FIXTURE_REGISTRY_KEY = $registryRoot + '\' + $case['Name']
         FOLDSENTINEL_HOOK_KEEP_REGISTRATION = [string]$case['KeepRegistration']
-        FOLDSENTINEL_HOOK_KEEP_RUN = [string]$case['KeepRun']
         FOLDSENTINEL_HOOK_UNKNOWN_SHORTCUT = [string]$case['UnknownShortcut']
     }
     $installExit = Run-FixtureProcess $installer "/S /D=$caseDirectory" $variables
@@ -280,6 +279,9 @@ foreach ($case in $cases) {
     # 同时核对真实退出码与删除状态；拒绝删除不能由退出码0假装成功。
     $deleted = -not (Test-Path -LiteralPath (Join-Path $caseDirectory 'installed-marker'))
     if ([bool]$deleted -ne [bool]$case['Delete']) { throw "$($case['Name'])：删除前拦截结果错误" }
+    $payloadRemoved = -not (Test-Path -LiteralPath (Join-Path $caseDirectory 'foldsentinel-service.exe'))
+    $expectPayloadRemoved = $case['Delete'] -and $case['Lock'] -ne 'foldsentinel-service.exe'
+    if ($payloadRemoved -ne $expectPayloadRemoved) { throw "$($case['Name'])：服务 payload 删除结果错误" }
     $logPath = Join-Path $caseDirectory 'helper.log'
     $expectedFinish = $case['Delete'] -and -not $case['StopBeforeFinish']
     $expectedCalls = if ($case['Missing']) { 0 } elseif ($expectedFinish) { 2 } else { 1 }
@@ -314,15 +316,20 @@ foreach ($case in $cases) {
     if ([IO.File]::ReadAllText((Join-Path $caseDirectory 'unknown-user-file')) -ne 'preserve user data') { throw "$($case['Name'])：安装目录未知用户文件被修改或删除" }
     if ($case['UnknownShortcut'] -and -not (Test-Path -LiteralPath (Join-Path $caseDirectory 'desktop.lnk'))) { throw "$($case['Name'])：其他程序的快捷方式被删除" }
     $caseRegistry = $registryRoot + '\' + $case['Name']
+    $expectedRunRemoved = $expectedFinish
+    $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($caseRegistry + '\Run')
+    $actualRunValue = if ($null -ne $runKey) { try { $runKey.GetValue('FoldSentinel', $null) } finally { $runKey.Dispose() } } else { $null }
+    if ($expectedRunRemoved -and $null -ne $actualRunValue) { throw "$($case['Name'])：本产品自启动值未删除" }
+    if (-not $expectedRunRemoved -and $actualRunValue -ne ($caseDirectory + '\FoldSentinel.exe')) { throw "$($case['Name'])：卸载前置步骤失败时自启动值应保留" }
     $registry = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($caseRegistry, $true)
     if ($null -eq $registry) { throw "$($case['Name'])：未知注册表值的键被删除" }
     try {
         if ($registry.GetValue('UnknownFixtureValue') -ne 'preserve-unknown') { throw "$($case['Name'])：未知注册表值被修改或删除" }
-        $expectedClean = $expectedFinish -and $case['Prepare'] -eq 0 -and $case['Finish'] -eq 0
+        $expectedClean = $expectedFinish -and $case['Finish'] -eq 0
         if ($expectedClean) {
-            if ($null -ne $registry.GetValue('', $null) -or $null -ne $registry.GetValue('Installer Language', $null)) { throw "$($case['Name'])：正常卸载未清除固定安装位置/语言值" }
+            if ($null -ne $registry.GetValue('', $null) -or $null -ne $registry.GetValue('Installer Language', $null)) { throw "$($case['Name'])：卸载未清除固定安装位置/语言值" }
         } else {
-            if ($registry.GetValue('') -ne $caseDirectory -or $registry.GetValue('Installer Language') -ne '2052') { throw "$($case['Name'])：强制/失败路径错误删除了产品偏好值" }
+            if ($registry.GetValue('') -ne $caseDirectory -or $registry.GetValue('Installer Language') -ne '2052') { throw "$($case['Name'])：失败路径错误删除了产品偏好值" }
         }
         foreach ($name in @('', 'Installer Language', 'UnknownFixtureValue')) { $registry.DeleteValue($name, $false) }
     } finally { $registry.Dispose() }
@@ -339,7 +346,7 @@ foreach ($case in $cases) {
     }
     # 只删除本次创建的已清空子键，不递归删除注册表。
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($caseRegistry, $false)
-    $results += [ordered]@{ name = $case['Name']; exit_code = $exitCode; removed_fixture_file = $deleted; helper_calls = $records.Count; known_preferences_removed = [bool]$expectedClean; unknown_preference_retained = $true; deletion_denied_by_real_handle = [bool]$case['Lock']; stopped_before_finish = [bool]$case['StopBeforeFinish']; unknown_user_file_retained = $true }
+    $results += [ordered]@{ name = $case['Name']; exit_code = $exitCode; removed_fixture_file = $deleted; helper_calls = $records.Count; autostart_value_removed = [bool]$expectedRunRemoved; known_preferences_removed = [bool]$expectedClean; unknown_preference_retained = $true; deletion_denied_by_real_handle = [bool]$case['Lock']; stopped_before_finish = [bool]$case['StopBeforeFinish']; unknown_user_file_retained = $true }
 }
 [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($registryRoot, $false)
 

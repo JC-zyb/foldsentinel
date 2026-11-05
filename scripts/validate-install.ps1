@@ -53,6 +53,8 @@ function Assert-InstalledFootprint([string]$ExpectedVersion) {
     foreach ($name in @('FoldSentinel.exe', 'uninstall.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $install $name) -PathType Leaf)) { throw "安装文件缺失：$name" }
     }
+    # v0.4 基线不含服务 payload；当前安装版即使未选择服务也必须携带组件。
+    if ($ExpectedVersion -eq $version -and -not (Test-Path -LiteralPath (Join-Path $install 'foldsentinel-service.exe') -PathType Leaf)) { throw '当前安装包缺少服务 payload' }
     $registration = Get-ItemProperty -LiteralPath $registry -ErrorAction Stop
     if ($registration.DisplayVersion -ne $ExpectedVersion -or $registration.UninstallString -ne ('"{0}"' -f (Join-Path $install 'uninstall.exe'))) { throw '卸载登记版本或路径错误' }
     $preferenceKey = Get-Item -LiteralPath $preferences -ErrorAction Stop
@@ -67,6 +69,7 @@ function Assert-InstalledFootprint([string]$ExpectedVersion) {
     } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
 }
 function Assert-UninstalledFootprint {
+    if (Test-Path -LiteralPath (Join-Path $install 'foldsentinel-service.exe')) { throw '正常卸载后服务 payload 仍存在' }
     if (Test-Path -LiteralPath $install) { throw '正常卸载后程序目录仍存在' }
     if (Test-Path -LiteralPath $registry) { throw '正常卸载后应用与功能登记仍存在' }
     if (Test-Path -LiteralPath $preferences) {
@@ -136,7 +139,7 @@ Run-Uninstaller
 Assert-UninstalledFootprint
 $result = [ordered]@{
     schema_version = 2; version = $version; baseline = '0.4.0'; passed = $true
-    checks = @('baseline_hash', 'install_current', 'uninstall_registration_and_shortcuts', 'webview_process_current_fresh', 'uninstall_current_fresh', 'install_baseline', 'webview_process_baseline', 'upgrade', 'webview_process_current', 'upgrade_sentinels_retained', 'silent_uninstall_rejects_unknown_metadata_before_removal', 'blocked_uninstall_retains_registration_shortcuts_and_sentinels', 'normal_uninstall_removes_program_directory_registration_shortcuts_and_known_preferences')
+    checks = @('baseline_hash', 'install_current', 'current_service_payload_present', 'uninstall_service_payload_removed', 'uninstall_registration_and_shortcuts', 'webview_process_current_fresh', 'uninstall_current_fresh', 'install_baseline', 'webview_process_baseline', 'upgrade', 'webview_process_current', 'upgrade_sentinels_retained', 'silent_uninstall_rejects_unknown_metadata_before_removal', 'blocked_uninstall_retains_registration_shortcuts_and_sentinels', 'normal_uninstall_removes_program_directory_registration_shortcuts_and_known_preferences')
     limitations = @('WebView2 child-process creation is a process smoke check, not interactive UI validation.', 'Sentinels check upgrade retention and unknown-metadata gating, not stored preferences or history semantics.', 'This disposable runner does not install the optional SYSTEM service; real service removal requires separate acceptance.', 'Runner has WebView2; missing-runtime and clean Windows VM checks remain separate.')
 }
 $json = $result | ConvertTo-Json -Depth 5

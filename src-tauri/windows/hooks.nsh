@@ -2,6 +2,8 @@
 !define FOLDSENTINEL_UNINSTALL_HOOKS
 
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
+!include "nsDialogs.nsh"
 !include "Win\COM.nsh"
 !define /ifndef SLGP_RAWPATH 0x4
 
@@ -12,6 +14,117 @@ Var FoldSentinelUninstallUnattended
 Var FoldSentinelUninstallPrepared
 Var FoldSentinelUninstallForced
 Var FoldSentinelUninstallRegistryCode
+Var FoldSentinelInstallServiceSelected
+Var FoldSentinelInstallServiceCheckbox
+Var FoldSentinelInstallServiceResult
+Var FoldSentinelInstallFinishText
+!define MUI_FINISHPAGE_TEXT "$FoldSentinelInstallFinishText"
+
+; hooks 在 Tauri 标准页面和产品常量之前载入。独立选项页仅使用本产品
+; 固定文案，不替换上游整套模板；默认不安装，静默/被动安装也不提权。
+Page custom FoldSentinelServicePage FoldSentinelServiceLeave
+
+Function FoldSentinelServicePage
+  IfSilent FoldSentinelServicePageSkip
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/P" $1
+  ${IfNot} ${Errors}
+    Goto FoldSentinelServicePageSkip
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    MessageBox MB_OK|MB_ICONSTOP "Cannot create the service installation page. Setup will stop."
+    Quit
+  ${EndIf}
+  ${If} $LANGUAGE == 2052
+    !insertmacro MUI_HEADER_TEXT "可选持续防护服务" "按需安装；仅服务部署需要管理员授权。"
+    ${NSD_CreateLabel} 0 0 100% 42u "SYSTEM 服务提供密码访问、到期重锁和后台持续防护。主程序按当前用户安装；不安装服务仍可使用本地保护与加密功能。"
+    Pop $0
+    ${NSD_CreateCheckbox} 0 52u 100% 28u "安装 SYSTEM 持续防护服务（需要管理员权限）"
+    Pop $FoldSentinelInstallServiceCheckbox
+    ${NSD_CreateLabel} 0 92u 100% 58u "选择后，安装程序将请求 Windows 管理员授权，并配置服务自动启动。已有兼容服务会保留；恢复资料不会删除。取消授权时只完成主程序安装。"
+    Pop $0
+  ${Else}
+    !insertmacro MUI_HEADER_TEXT "Optional protection service" "Only service deployment requires administrator approval."
+    ${NSD_CreateLabel} 0 0 100% 42u "The SYSTEM service provides password access, timed relocking and background protection. The app installs for the current user. Local protection and encryption remain available without the service."
+    Pop $0
+    ${NSD_CreateCheckbox} 0 52u 100% 28u "Install the SYSTEM protection service (administrator access required)"
+    Pop $FoldSentinelInstallServiceCheckbox
+    ${NSD_CreateLabel} 0 92u 100% 58u "When selected, setup requests Windows administrator approval and configures automatic service startup. Compatible existing services and recovery records are retained. Canceling approval installs the app only."
+    Pop $0
+  ${EndIf}
+  ${If} $FoldSentinelInstallServiceSelected == ${BST_CHECKED}
+    ${NSD_Check} $FoldSentinelInstallServiceCheckbox
+  ${Else}
+    ${NSD_Uncheck} $FoldSentinelInstallServiceCheckbox
+  ${EndIf}
+  nsDialogs::Show
+  Return
+FoldSentinelServicePageSkip:
+  StrCpy $FoldSentinelInstallServiceSelected 0
+  Abort
+FunctionEnd
+
+Function FoldSentinelServiceLeave
+  ${NSD_GetState} $FoldSentinelInstallServiceCheckbox $FoldSentinelInstallServiceSelected
+FunctionEnd
+
+; 把调用与交互反馈分开，使隔离夹具能核对真实 ExecWait 和退出码而不触发 UAC。
+!macro FoldSentinelRunServiceInstall
+  StrCpy $FoldSentinelInstallServiceResult 21
+  ${If} ${FileExists} "$INSTDIR\foldsentinel-service.exe"
+    ClearErrors
+    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --install-service' $FoldSentinelInstallServiceResult
+    ${If} ${Errors}
+      StrCpy $FoldSentinelInstallServiceResult 21
+    ${EndIf}
+  ${EndIf}
+  ${If} $FoldSentinelInstallServiceResult == 0
+    DetailPrint "FoldSentinel: protection service installed or verified."
+  ${Else}
+    DetailPrint "FoldSentinel: app installed, but service setup did not complete (exit $FoldSentinelInstallServiceResult)."
+    SetErrorLevel $FoldSentinelInstallServiceResult
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  ${If} $LANGUAGE == 2052
+    StrCpy $FoldSentinelInstallFinishText "主程序已安装。持续防护服务是可选组件；未选择安装时，仍可使用本地保护与加密功能。点击完成退出安装程序。"
+  ${Else}
+    StrCpy $FoldSentinelInstallFinishText "The app is installed. The protection service is optional; local protection and encryption remain available without it. Click Finish to close setup."
+  ${EndIf}
+  ; 不能让 /S、/P 或脚本设值绕过用户在选项页上的明确选择。
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode != 1
+  ${AndIf} $FoldSentinelInstallServiceSelected == ${BST_CHECKED}
+    !insertmacro FoldSentinelRunServiceInstall
+    ${If} $FoldSentinelInstallServiceResult == 0
+      ${If} $LANGUAGE == 2052
+        StrCpy $FoldSentinelInstallFinishText "主程序已安装，持续防护服务已安装或验证可用。请在应用中核对服务连接与已登记项目。点击完成退出安装程序。"
+      ${Else}
+        StrCpy $FoldSentinelInstallFinishText "The app is installed, and the protection service was installed or verified available. Check service connection and registered items in the app. Click Finish to close setup."
+      ${EndIf}
+    ${Else}
+      ${If} $LANGUAGE == 2052
+        StrCpy $FoldSentinelInstallFinishText "主程序已安装，但持续防护服务安装未完成（错误码：$FoldSentinelInstallServiceResult）。请保留恢复资料，重新运行安装器并选择服务选项重试。点击完成退出安装程序。"
+        ${If} $FoldSentinelInstallServiceResult == 1223
+          MessageBox MB_OK|MB_ICONEXCLAMATION "主程序已安装，但你取消了管理员授权，持续防护服务未完成安装。可重新运行安装器并选择安装服务；现有恢复资料保留。"
+        ${Else}
+          MessageBox MB_OK|MB_ICONEXCLAMATION "主程序已安装，但持续防护服务未完成安装（错误码：$FoldSentinelInstallServiceResult）。请保留恢复资料，查看服务状态与安装指引后重试；不能视为服务已启用。"
+        ${EndIf}
+      ${Else}
+        StrCpy $FoldSentinelInstallFinishText "The app is installed, but protection service setup did not complete (exit $FoldSentinelInstallServiceResult). Retain recovery records and run setup again with the service option to retry. Click Finish to close setup."
+        ${If} $FoldSentinelInstallServiceResult == 1223
+          MessageBox MB_OK|MB_ICONEXCLAMATION "The app is installed, but administrator approval was canceled and service setup did not complete. Run setup again and select the service option to retry. Recovery records are retained."
+        ${Else}
+          MessageBox MB_OK|MB_ICONEXCLAMATION "The app is installed, but service setup did not complete (exit $FoldSentinelInstallServiceResult). Retain recovery records and review service status and installation guidance before retrying. The service is not confirmed available."
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 ; Tauri 的 Delete / DeleteRegKey 不保证失败后返回非零。删除恢复资料前必须
 ; 独立核对已知程序与系统入口；未知文件和指向其他程序的快捷方式不删除。
@@ -114,12 +227,12 @@ Var FoldSentinelUninstallRegistryCode
 
 ; 只删除安装器写入的已知值；未知值和子键必须保留。系统返回“值/键不存在”
 ; 可视为已清理，权限等其他错误须令卸载收尾失败。
-!macro FoldSentinelDeleteKnownRegistryValue ROOT VALUE
-  ; System 插件随 NSIS 运行在32位进程中，显式匹配 Tauri 的目标注册表视图。
+!macro FoldSentinelDeleteKnownRegistryValue ROOT KEY VALUE
+  ; System 插件随 NSIS 运行在32位进程中，显式匹配目标注册表视图。
   !if "${ARCH}" == "x64"
-    System::Call 'advapi32::RegOpenKeyExW(p ${ROOT}, w "${MANUPRODUCTKEY}", i 0, i 0x103, *p .r0) i .s'
+    System::Call 'advapi32::RegOpenKeyExW(p ${ROOT}, w "${KEY}", i 0, i 0x103, *p .r0) i .s'
   !else
-    System::Call 'advapi32::RegOpenKeyExW(p ${ROOT}, w "${MANUPRODUCTKEY}", i 0, i 3, *p .r0) i .s'
+    System::Call 'advapi32::RegOpenKeyExW(p ${ROOT}, w "${KEY}", i 0, i 3, *p .r0) i .s'
   !endif
   Pop $FoldSentinelUninstallRegistryCode
   ${If} $FoldSentinelUninstallRegistryCode == 0
@@ -222,6 +335,7 @@ FoldSentinelUninstallPrepareComplete:
     !define FOLDSENTINEL_UNINSTALL_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
   !endif
   !insertmacro FoldSentinelVerifyRemovedFile "$INSTDIR\${MAINBINARYNAME}.exe"
+  !insertmacro FoldSentinelVerifyRemovedFile "$INSTDIR\foldsentinel-service.exe"
   !insertmacro FoldSentinelVerifyRemovedFile "$INSTDIR\uninstall.exe"
   !insertmacro FoldSentinelVerifyRemovedShortcut "${FOLDSENTINEL_UNINSTALL_DESKTOP_SHORTCUT}"
   !insertmacro FoldSentinelVerifyRemovedShortcut "${FOLDSENTINEL_UNINSTALL_STARTMENU_SHORTCUT}"
@@ -237,6 +351,8 @@ FoldSentinelUninstallPrepareComplete:
   !else
     !insertmacro FoldSentinelVerifyRemovedRegistryKey 0x80000001 "${UNINSTKEY}"
   !endif
+  ; 自启动值只属于当前用户，不是恢复资料；无论普通或强制卸载都移除本产品项。
+  !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 "${FOLDSENTINEL_UNINSTALL_RUN_KEY}" "${PRODUCTNAME}"
   !insertmacro FoldSentinelVerifyRemovedRegistryValue 0x80000001 "${FOLDSENTINEL_UNINSTALL_RUN_KEY}" "${PRODUCTNAME}"
   ClearErrors
   ${If} $FoldSentinelUninstallUnattended == 1
@@ -248,25 +364,25 @@ FoldSentinelUninstallPrepareComplete:
   ${If} $FoldSentinelUninstallExitCode != 0
     Goto FoldSentinelUninstallFinishFailed
   ${EndIf}
-  ${If} $FoldSentinelUninstallForced == 0
+  ; 普通与强制卸载都清理已知产品安装登记；恢复 JSON、ProgramData 与
+  ; 强制保留的应用用户数据仍由 helper 按原协议处理，不在此删除。
     !if "${INSTALLMODE}" == "perMachine"
-      !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000002 ""
+      !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000002 "${MANUPRODUCTKEY}" ""
     !else if "${INSTALLMODE}" == "both"
       ${If} $MultiUser.InstallMode == "AllUsers"
-        !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000002 ""
+        !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000002 "${MANUPRODUCTKEY}" ""
       ${Else}
-        !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 ""
+        !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 "${MANUPRODUCTKEY}" ""
       ${EndIf}
     !else
-      !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 ""
+      !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 "${MANUPRODUCTKEY}" ""
     !endif
     ; Tauri 的安装器语言始终保存在当前账户，即使程序按机器安装。
-    !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 "Installer Language"
+    !insertmacro FoldSentinelDeleteKnownRegistryValue 0x80000001 "${MANUPRODUCTKEY}" "Installer Language"
     DeleteRegKey /ifempty SHCTX "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"
     DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty HKCU "${MANUKEY}"
-  ${EndIf}
   Goto FoldSentinelUninstallFinishComplete
 
 FoldSentinelUninstallFinishLaunchFailed:

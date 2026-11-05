@@ -22,6 +22,12 @@ const { chromium } = await import(pathToFileURL(resolve(values.playwright)).href
 const browser = await chromium.launch({ executablePath: resolve(values.browser), headless: true, args: ['--no-proxy-server'] });
 const checks = [], errors = [];
 let passed = false;
+async function selectLanguage(page, language) {
+  const currentPage = await page.locator('.nav-item[aria-current="page"]').getAttribute('id');
+  if (currentPage !== 'nav-settings') await page.locator('#nav-settings').click();
+  await page.locator('#language').selectOption(language);
+  if (currentPage && currentPage !== 'nav-settings') await page.locator(`#${currentPage}`).click();
+}
 
 // 每个视图都读取浏览器实际样式。半透明背景由根到叶逐层合成，不用父元素单层颜色猜测。
 async function audit(page, name, width, scheme, language) {
@@ -139,7 +145,7 @@ async function forcedColors() {
     await context.route('**/*', route => new URL(route.request().url()).origin === url.origin ? route.continue() : route.abort());
     const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
     await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.locator('#language').selectOption('en');
+    await selectLanguage(page, 'en');
     assert.equal(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), true);
     const inspect = () => page.evaluate(() => {
       const systemColor = name => {
@@ -172,18 +178,20 @@ async function forcedColors() {
       assert.equal(control.outlineColor, result.highlight, '焦点使用系统 Highlight，与选中下划线分别表达');
     };
     const initial = await inspect();
-    assertSelection(initial, ['nav-vault', 'encrypt-tab'], ['nav-attributes', 'decrypt-tab', 'verify-tab']);
+    assertSelection(initial, ['nav-vault', 'encrypt-tab'], ['nav-attributes', 'nav-settings', 'decrypt-tab', 'verify-tab']);
     await page.keyboard.press('Tab'); await page.locator('#nav-attributes').focus();
     const navFocus = await inspect();
-    assertSelection(navFocus, ['nav-vault', 'encrypt-tab'], ['nav-attributes', 'decrypt-tab', 'verify-tab']);
+    assertSelection(navFocus, ['nav-vault', 'encrypt-tab'], ['nav-attributes', 'nav-settings', 'decrypt-tab', 'verify-tab']);
     assertFocus(navFocus, 'nav-attributes');
     assert.equal(navFocus.controls['nav-vault'].outlineStyle, 'none', '选中但未聚焦的导航无需焦点轮廓');
     await page.locator('#nav-attributes').click();
-    assertSelection(await inspect(), ['nav-attributes', 'encrypt-tab'], ['nav-vault', 'decrypt-tab', 'verify-tab']);
+    assertSelection(await inspect(), ['nav-attributes', 'encrypt-tab'], ['nav-vault', 'nav-settings', 'decrypt-tab', 'verify-tab']);
+    await page.locator('#nav-settings').click();
+    assertSelection(await inspect(), ['nav-settings', 'encrypt-tab'], ['nav-vault', 'nav-attributes', 'decrypt-tab', 'verify-tab']);
     await page.locator('#nav-vault').click(); await page.locator('#decrypt-tab').click();
     await page.keyboard.press('Tab'); await page.locator('#encrypt-tab').focus();
     const modeFocus = await inspect();
-    assertSelection(modeFocus, ['nav-vault', 'decrypt-tab'], ['nav-attributes', 'encrypt-tab', 'verify-tab']);
+    assertSelection(modeFocus, ['nav-vault', 'decrypt-tab'], ['nav-attributes', 'nav-settings', 'encrypt-tab', 'verify-tab']);
     assertFocus(modeFocus, 'encrypt-tab');
     assert.equal(modeFocus.controls['decrypt-tab'].outlineStyle, 'none', '选中但未聚焦的操作模式无需焦点轮廓');
     for (const [id, control] of Object.entries(initial.controls)) {
@@ -215,8 +223,24 @@ try {
       });
       const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.locator('#nav-settings').click();
       await page.locator('#language').selectOption(language);
+      assert.equal(await page.locator('#autostart').isChecked(), false, '默认自启动保持关闭');
+      assert.equal(await page.locator('#autostart').isDisabled(), true, '浏览器预览不得修改桌面自启动');
       await tokens(page, scheme, width, language);
+      await audit(page, 'settings-system-theme', width, scheme, language);
+      for (const [explicitTheme, expectedBackground] of [['light', '#f4f7fa'], ['dark', '#0e1923']]) {
+        await page.locator('#theme').selectOption(explicitTheme);
+        const applied = await page.evaluate(() => ({
+          mode: document.documentElement.dataset.theme,
+          background: getComputedStyle(document.documentElement).getPropertyValue('--page-bg').trim(),
+          colorScheme: getComputedStyle(document.documentElement).colorScheme
+        }));
+        assert.deepEqual(applied, { mode: explicitTheme, background: expectedBackground, colorScheme: explicitTheme });
+        await audit(page, `settings-${explicitTheme}-theme`, width, explicitTheme, language);
+      }
+      await page.locator('#theme').selectOption('system');
+      await page.locator('#nav-vault').click();
       for (const operation of ['encrypt', 'decrypt', 'verify']) {
         await page.locator(`#${operation}-tab`).click();
         await page.evaluate(() => { window.uiThemeFixture.queue.tasks = []; window.uiThemeFixture.renderTasks(); window.uiThemeFixture.setSources([]); document.querySelector('#job-progress').hidden = true; });

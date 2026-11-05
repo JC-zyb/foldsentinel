@@ -14,6 +14,17 @@ export function sourceKey(path: string): string {
     .replace(/^\\\\\?\\/, '').replace(/\\+$/, '').toLowerCase();
 }
 
+export function outputParent(path: string | null): string {
+  if (!path) return '';
+  const normalized = path.replaceAll('/', '\\').replace(/\\+$/, '');
+  const separator = normalized.lastIndexOf('\\');
+  if (separator < 0) return '';
+  if (separator === 0) return '\\';
+  const parent = normalized.slice(0, separator);
+  if (/^[a-z]:$/i.test(parent) || /^\\\\\?\\[a-z]:$/i.test(parent)) return `${parent}\\`;
+  return parent;
+}
+
 export function mergeSourcePaths(existing: readonly string[], incoming: readonly string[]): string[] {
   const seen = new Set<string>();
   return [...existing, ...incoming].map(path => path.trim()).filter(path => {

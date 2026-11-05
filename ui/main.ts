@@ -3,16 +3,26 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { detectLanguage, errorText, failureCode, language, setLanguage, t, type Language, type MessageKey } from './i18n';
-import { batchSummary, HISTORY_KEY, MAX_SOURCES, inspectSources, loadHistory, mergeSourcePaths, serializeHistory, sourceKey, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
+import { batchSummary, HISTORY_KEY, MAX_SOURCES, inspectSources, loadHistory, mergeSourcePaths, outputParent, serializeHistory, sourceKey, TaskQueue, type Operation, type Plan, type Progress, type Task, type VaultReport } from './tasks';
 import { previewPage, type PackagePreview } from './preview';
 import { ATTRIBUTE_PAGE_SIZE, createRootRecord, fillProtectionModes, syncRootControls, type ManagedRoot, type ProtectionMode, type RootVerification } from './attributes';
 import { ProtectionRecords, runProtectionAction, runProtectionBatch, validProtectionNote, type ProtectionBatchResult } from './protection-workflow';
 import { ManagedProtectionUi } from './managed';
+import { UpdatesUi, type UpdateCheck } from './updates';
 import './style.css';
 
 const LANGUAGE_KEY = 'foldsentinel.language';
+const THEME_KEY = 'foldsentinel.theme';
+type Theme = 'system' | 'light' | 'dark';
 let startupError: MessageKey | null = null;
-try { setLanguage(detectLanguage(localStorage.getItem(LANGUAGE_KEY), navigator.languages)); }
+let theme: Theme = 'system';
+try {
+  setLanguage(detectLanguage(localStorage.getItem(LANGUAGE_KEY), navigator.languages));
+  const savedTheme = localStorage.getItem(THEME_KEY);
+  if (savedTheme === 'light' || savedTheme === 'dark') theme = savedTheme;
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : theme;
+}
 catch { setLanguage(detectLanguage(null, navigator.languages)); startupError = 'storageFailed'; }
 const text = (key: MessageKey) => `data-i18n="${key}"`;
 const shield = '<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 3 27 7v8c0 7-7 12-11 14C12 27 5 22 5 15V7l11-4Z" stroke="currentColor" stroke-width="2"/><path d="m11 16 3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -20,11 +30,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <aside class="sidebar">
     <div class="brand"><span class="brand-icon">${shield}</span><div>FoldSentinel<small ${text('brand')}></small></div></div>
     <p id="nav-label" class="nav-label" ${text('local')}></p>
-    <nav aria-labelledby="nav-label"><button id="nav-vault" class="nav-item selected" aria-current="page" ${text('vault')}></button><button id="nav-attributes" class="nav-item" ${text('attributes')}></button></nav>
+    <nav aria-labelledby="nav-label"><button id="nav-vault" class="nav-item selected" aria-current="page" ${text('vault')}></button><button id="nav-attributes" class="nav-item" ${text('attributes')}></button><button id="nav-settings" class="nav-item" ${text('settings')}></button></nav>
     <div class="sidebar-footer"><span class="local-dot"></span><span ${text('localOnly')}></span><small ${text('license')}></small></div>
   </aside>
   <main aria-labelledby="page-title">
-    <header><div><p class="eyebrow" ${text('eyebrow')}></p><h1 id="page-title" tabindex="-1"></h1><p id="page-description"></p></div><div class="language-control"><label for="language" ${text('language')}></label><select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div></header>
+    <header><div><p class="eyebrow" ${text('eyebrow')}></p><h1 id="page-title" tabindex="-1"></h1><p id="page-description"></p></div></header>
     <div id="result" role="status" aria-live="polite" tabindex="-1" hidden></div>
     <section id="vault-panel">
       <div id="recovery-alert" class="notice recovery-alert" role="status" hidden><p id="recovery-alert-text"></p><button id="review-recovery" type="button" class="secondary" ${text('reviewRecovery')}></button></div>
@@ -58,6 +68,32 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="records saved-roots protection-records" aria-labelledby="roots-title"><div class="records-heading"><h2 id="roots-title" tabindex="-1" ${text('managedRoots')}></h2><form id="protection-search-form" class="protection-search" role="search"><label for="protection-search" class="sr-only" ${text('searchProtection')}></label><input id="protection-search" type="search" maxlength="160" autocomplete="off"><button id="search-protection" type="submit" class="secondary" ${text('search')}></button></form></div><p id="root-summary" role="status" class="field-help"></p><div id="records-feedback" class="protection-feedback" role="status" aria-live="polite" hidden></div><p class="field-help" ${text('verificationScope')}></p><div class="protection-bulk-toolbar"><label class="checkbox"><input id="select-protection-page" type="checkbox"><span ${text('selectProtectionPage')}></span></label><span id="selected-protection-count" role="status"></span><button id="verify-selected-protection" type="button" class="secondary" ${text('verifySelectedProtection')}></button><button id="restore-selected-protection" type="button" class="secondary" aria-controls="protection-restore-confirm" ${text('restoreSelectedProtection')}></button></div><section id="protection-restore-confirm" class="protection-confirm" hidden aria-labelledby="protection-restore-title"><h3 id="protection-restore-title" ${text('confirmSelectedRestore')}></h3><p id="protection-restore-count"></p><ul id="protection-restore-items"></ul><div class="selection-actions"><button id="confirm-selected-restore" type="button" class="primary" ${text('confirmRestore')}></button><button id="cancel-selected-restore" type="button" class="secondary" ${text('cancel')}></button></div></section><p id="protection-batch-feedback" class="protection-feedback" role="status" hidden></p><ul id="protection-batch-results" class="protection-item-results"></ul><div class="protection-columns" aria-hidden="true"><span ${text('rootName')}></span><span ${text('registeredMode')}></span><span ${text('verificationActions')}></span></div><ul id="root-list"></ul><div id="roots-pagination" class="selection-actions"><button id="roots-previous" class="secondary" type="button" ${text('previousPage')}></button><button id="roots-next" class="secondary" type="button" ${text('nextPage')}></button></div></section>
       <section id="managed-service-panel" aria-labelledby="managed-title"></section>
     </section>
+    <section id="settings-panel" class="settings-page" hidden aria-labelledby="settings-general-title">
+      <section class="settings-group">
+        <h2 id="settings-general-title" ${text('settingsGeneral')}></h2>
+        <div class="settings-row">
+          <div><label for="language" ${text('language')}></label><p class="field-help" ${text('settingsLanguageHelp')}></p></div>
+          <select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select>
+        </div>
+        <div class="settings-row">
+          <div><label for="theme" ${text('settingsTheme')}></label><p class="field-help" ${text('settingsThemeHelp')}></p></div>
+          <select id="theme"><option value="system" ${text('settingsThemeSystem')}></option><option value="light" ${text('settingsThemeLight')}></option><option value="dark" ${text('settingsThemeDark')}></option></select>
+        </div>
+      </section>
+      <section class="settings-group">
+        <h2 ${text('settingsStartup')}></h2>
+        <div class="settings-row settings-row-toggle">
+          <div><label for="autostart" ${text('settingsAutostart')}></label><p id="autostart-help" class="field-help" ${text('settingsAutostartHelp')}></p></div>
+          <input id="autostart" class="setting-checkbox" type="checkbox" role="switch" aria-describedby="autostart-help settings-feedback">
+        </div>
+        <p id="settings-feedback" class="settings-feedback" role="status" aria-live="polite"></p>
+      </section>
+      <section class="settings-group settings-about">
+        <h2 ${text('settingsAbout')}></h2>
+        <div class="settings-row"><span ${text('settingsVersion')}></span><span id="settings-app-version">v0.9.1</span></div>
+        <div id="update-settings"></div>
+      </section>
+    </section>
     <section id="diagnostic" class="diagnostic" hidden><details><summary ${text('errorDetails')}></summary><p class="field-help" ${text('diagnosticPrivacy')}></p><pre id="diagnostic-text"></pre><div class="selection-actions"><button id="copy-diagnostic" type="button" class="secondary" ${text('copyDetails')}></button><button id="export-diagnostic" type="button" class="secondary" ${text('exportDetails')}></button></div><p id="diagnostic-status" role="status"></p></details></section><footer class="main-footer"><span id="activity"></span><span ${text('keepSource')}></span></footer>
   </main>`;
 
@@ -73,7 +109,10 @@ document.querySelectorAll('form').forEach(form => {
   }, true);
 });
 let operation: Operation = 'encrypt';
-let page: 'vault' | 'attributes' = 'vault';
+let page: 'vault' | 'attributes' | 'settings' = 'vault';
+let autostartEnabled: boolean | null = null;
+let autostartBusy = false;
+let settingsFeedback: MessageKey | null = null;
 let uiBusy = false;
 let historyBroken = false;
 let cancelling = false;
@@ -220,19 +259,73 @@ function modeLabels(): void {
 function setMode(mode: Operation): void { if (operation !== mode) { operation = mode; clearPasswords(); clearPreview(); } modeLabels(); }
 function translate(): void {
   managedUi?.translate();
+  updatesUi?.translate();
   const policy = element<HTMLSelectElement>('attribute-mode');
   fillProtectionModes(policy, (policy.value || 'hidden-locked') as ProtectionMode);
   document.querySelectorAll<HTMLElement>('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n as MessageKey); });
-  element<HTMLSelectElement>('language').value = language;
+  renderSettings();
   element<HTMLTextAreaElement>('input-path').placeholder = t('sourcePlaceholder'); input('output-path').placeholder = t('outputPlaceholder');
   input('protection-search').placeholder = t('searchProtection');
-  element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
+  element('page-title').textContent = t(page); element('page-description').textContent = t(pageDescription());
   modeLabels(); renderSources(); renderTasks(); renderJobs(); renderRecords(); renderProtectionDraft(); renderProtectionBatchResults(); renderRestoreSelection(); renderProtectionFeedback('protection-backup-feedback', backupFeedback); renderResult(); renderDiagnostic(); renderPreview(); syncControls(); if (progress) updateProgress(progress);
+}
+function pageDescription(): MessageKey {
+  return page === 'vault' ? 'vaultDescription' : page === 'attributes' ? 'attributesDescription' : 'settingsDescription';
+}
+function renderSettings(): void {
+  element<HTMLSelectElement>('language').value = language;
+  element<HTMLSelectElement>('theme').value = theme;
+  const autostart = input('autostart');
+  autostart.checked = autostartEnabled === true;
+  autostart.disabled = !isTauri() || autostartBusy || autostartEnabled === null;
+  const status = element('settings-feedback');
+  const key = settingsFeedback ?? (!isTauri() ? 'settingsAutostartDesktopOnly' : autostartBusy ? 'settingsSaving' : autostartEnabled === null ? 'settingsAutostartLoading' : autostartEnabled ? 'settingsAutostartOn' : 'settingsAutostartOff');
+  status.textContent = t(key);
+}
+async function loadAutostart(): Promise<void> {
+  if (!isTauri() || autostartBusy || autostartEnabled !== null) return;
+  autostartBusy = true;
+  settingsFeedback = null;
+  renderSettings();
+  try { autostartEnabled = await invoke<boolean>('autostart_enabled'); }
+  catch (error) { console.error(error); settingsFeedback = 'settingsAutostartUnavailable'; }
+  finally { autostartBusy = false; renderSettings(); }
 }
 element<HTMLSelectElement>('language').onchange = () => {
   const next = element<HTMLSelectElement>('language').value as Language;
   try { localStorage.setItem(LANGUAGE_KEY, next); setLanguage(next); translate(); }
   catch { element<HTMLSelectElement>('language').value = language; showResult('storageFailed', {}, true); }
+};
+element<HTMLSelectElement>('theme').onchange = () => {
+  const next = element<HTMLSelectElement>('theme').value as Theme;
+  try {
+    localStorage.setItem(THEME_KEY, next);
+    theme = next;
+    document.documentElement.dataset.theme = next;
+    document.documentElement.style.colorScheme = next === 'system' ? 'light dark' : next;
+    settingsFeedback = null;
+    renderSettings();
+  } catch { element<HTMLSelectElement>('theme').value = theme; settingsFeedback = 'storageFailed'; renderSettings(); }
+};
+input('autostart').onchange = () => {
+  if (autostartEnabled === null || autostartBusy || !isTauri()) return;
+  const previous = autostartEnabled;
+  const next = input('autostart').checked;
+  autostartEnabled = next;
+  autostartBusy = true;
+  settingsFeedback = null;
+  renderSettings();
+  void invoke<boolean>('set_autostart_enabled', { enabled: next }).then(enabled => {
+    autostartEnabled = enabled;
+    settingsFeedback = null;
+  }).catch(error => {
+    console.error(error);
+    autostartEnabled = previous;
+    settingsFeedback = 'settingsAutostartError';
+  }).finally(() => {
+    autostartBusy = false;
+    renderSettings();
+  });
 };
 for (const mode of ['encrypt', 'decrypt', 'verify'] as Operation[]) element(`${mode}-tab`).onclick = () => setMode(mode);
 input('show-password').onchange = () => { const type = input('show-password').checked ? 'text' : 'password'; input('password').type = type; input('confirm-password').type = type; };
@@ -372,7 +465,7 @@ function button(key: MessageKey, action: () => void): HTMLButtonElement {
 }
 function refill(plan: Plan): void {
   page = 'vault'; showPage(); setMode(plan.operation); setSources([plan.input]);
-  input('output-path').value = plan.output?.replace(/[\\/][^\\/]+$/, '') ?? '';
+  input('output-path').value = outputParent(plan.output);
   clearPasswords(); showResult('retryHelp'); input('password').focus();
 }
 function renderTasks(): void {
@@ -398,7 +491,7 @@ function renderTasks(): void {
     const failed = batch.filter(task => task.status === 'failed');
     if (!failed.length) return;
     page = 'vault'; showPage(); setMode(failed[0].operation); setSources(mergeSourcePaths([], failed.map(task => task.input)));
-    const parents = new Set(failed.map(task => task.output?.replace(/[\\/][^\\/]+$/, '') ?? ''));
+    const parents = new Set(failed.map(task => outputParent(task.output)));
     input('output-path').value = parents.size === 1 ? [...parents][0] : '';
     clearPasswords(); showResult('retryHelp'); input('password').focus();
   };
@@ -824,18 +917,25 @@ element('root-list').addEventListener('change', event => {
 element('review-queue').onclick = () => { element('queue-title').scrollIntoView({ block: 'start' }); element('queue-title').focus({ preventScroll: true }); };
 function showPage(): void {
   managedUi?.setVisible(page === 'attributes');
-  for (const value of ['vault', 'attributes'] as const) {
+  for (const value of ['vault', 'attributes', 'settings'] as const) {
     element(`${value}-panel`).hidden = value !== page; element(`nav-${value}`).classList.toggle('selected', value === page);
     if (value === page) element(`nav-${value}`).setAttribute('aria-current', 'page'); else element(`nav-${value}`).removeAttribute('aria-current');
   }
-  element('page-title').textContent = t(page); element('page-description').textContent = t(page === 'vault' ? 'vaultDescription' : 'attributesDescription');
+  element('page-title').textContent = t(page); element('page-description').textContent = t(pageDescription());
 }
-for (const value of ['vault', 'attributes'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); lastResult = null; renderResult(); showPage(); element('page-title').focus(); if (value === 'attributes' && isTauri() && !uiBusy && !queue.running) void refreshProtectionPage(); };
+for (const value of ['vault', 'attributes', 'settings'] as const) element(`nav-${value}`).onclick = () => { page = value; clearPasswords(); lastResult = null; renderResult(); showPage(); element('page-title').focus(); if (value === 'attributes' && isTauri() && !uiBusy && !queue.running) void refreshProtectionPage(); if (value === 'settings') void loadAutostart(); };
 element('review-attributes').onclick = () => { page = 'attributes'; clearPasswords(); lastResult = null; renderResult(); showPage(); element('roots-title').focus(); if (isTauri()) void refreshProtectionPage(); };
 element('review-managed-service').onclick = () => { managedUi?.clearPasswords(); element('managed-service-panel').scrollIntoView({ block: 'start' }); element('managed-title').focus({ preventScroll: true }); };
 
+const updatesUi = new UpdatesUi(element('update-settings'), {
+  isDesktop: isTauri,
+  check: () => invoke<UpdateCheck>('check_for_updates'),
+  open: url => invoke<void>('open_release_page', { url }),
+});
 managedUi = new ManagedProtectionUi(element('managed-service-panel'), {
   request: command => invoke('managed_protection', { command }),
+  installationStatus: () => invoke('service_installation_status'),
+  installService: () => invoke('service_install'),
   run: action => { protectionBusyKey = 'workingServiceProtection'; return runUi(action); }, isDesktop: isTauri, isBlocked: () => uiBusy || queue.running,
   choose: async directory => {
     const path = await open({ directory, multiple: false, title: t(directory ? 'addProtectionFolders' : 'addProtectionFiles') });
@@ -844,6 +944,7 @@ managedUi = new ManagedProtectionUi(element('managed-service-panel'), {
 });
 translate();
 if (startupError) showResult(startupError, {}, true);
+void loadAutostart();
 if (isTauri()) {
   void getCurrentWindow().onCloseRequested(event => {
     queue.pause(); clearPasswords();

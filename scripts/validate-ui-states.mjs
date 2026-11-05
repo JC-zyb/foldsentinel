@@ -18,6 +18,12 @@ const browser = await chromium.launch({ executablePath: resolve(values.browser),
 const checks = [];
 const errors = [];
 let passed = false;
+async function selectLanguage(page, language) {
+  const currentPage = await page.locator('.nav-item[aria-current="page"]').getAttribute('id');
+  if (currentPage !== 'nav-settings') await page.locator('#nav-settings').click();
+  await page.locator('#language').selectOption(language);
+  if (currentPage && currentPage !== 'nav-settings') await page.locator(`#${currentPage}`).click();
+}
 try {
   const context = await browser.newContext({ viewport: { width: 1080, height: 820 }, locale: 'zh-CN' });
   await context.addInitScript(() => localStorage.setItem('foldsentinel.history.v1', JSON.stringify([
@@ -86,6 +92,7 @@ try {
   });
   assert.equal(await page.locator('#queue-title').evaluate(heading => document.activeElement === heading), true, '等待项开始后原取消动作消失时聚焦稳定队列标题');
   checks.push({ operation: 'task-start-removes-action', real_queue: true, heading_focus_fallback: true });
+  await page.locator('#nav-settings').click();
   await page.locator('#language').focus();
   await page.evaluate(async () => {
     window.uiStateTaskQueue.pause();
@@ -94,6 +101,7 @@ try {
   });
   assert.equal(await page.locator('#language').evaluate(select => document.activeElement === select), true, '队列结束重建不抢占列表外焦点');
   checks.push({ operation: 'task-rebuild-external-focus', real_queue: true, external_focus_preserved: true });
+  await page.locator('#nav-vault').click();
   await page.evaluate(() => window.uiStateTaskQueue.add([
     { input: 'D:\\ui-state-fixture\\cancel-waiting.fse', output: null, operation: 'verify' }
   ], 'UI state fixture only'));
@@ -124,9 +132,9 @@ try {
   const pauseStatusBox = await pauseStatus.boundingBox();
   assert.ok(pauseStatusBox && pauseStatusBox.y >= 0 && pauseStatusBox.y + pauseStatusBox.height <= 820, '暂停反馈完整进入视口');
   assert.equal(await page.locator('#pause-queue').isDisabled(), true, '已接受暂停请求时禁用重复暂停');
-  await page.locator('#language').selectOption('en');
+  await selectLanguage(page, 'en');
   assert.match(await pauseStatus.textContent(), /The queue will pause after the current task/, '暂停状态同步切换英文');
-  await page.locator('#language').selectOption('zh-CN');
+  await selectLanguage(page, 'zh-CN');
   assert.match(await pauseStatus.textContent(), /将在当前任务结束后暂停/, '暂停状态同步切回中文');
   await page.evaluate(async () => { window.cancelPauseTask(); await window.pendingPauseRun; });
   assert.deepEqual(await page.evaluate(() => ({
@@ -194,6 +202,7 @@ try {
 
   await action.focus();
   await page.evaluate(() => { window.pendingServiceRefresh = window.serviceStateUi.refresh(true); });
+  await page.locator('#nav-settings').click();
   await page.locator('#language').focus();
   await page.evaluate(async () => { window.completeServiceRead(); await window.pendingServiceRefresh; });
   assert.equal(await page.locator('#language').evaluate(select => document.activeElement === select), true, '异步刷新不抢回用户主动移出的焦点');

@@ -22,6 +22,12 @@ const browser = await chromium.launch({ executablePath: resolve(values.browser),
 const checks = [];
 const errors = [];
 let failed = false;
+async function selectLanguage(page, language) {
+  const currentPage = await page.locator('.nav-item[aria-current="page"]').getAttribute('id');
+  if (currentPage !== 'nav-settings') await page.locator('#nav-settings').click();
+  await page.locator('#language').selectOption(language);
+  if (currentPage && currentPage !== 'nav-settings') await page.locator(`#${currentPage}`).click();
+}
 try {
   for (const [width, scale] of [[1440, 1], [1080, 1], [961, 1], [960, 1], [900, 1], [720, 1], [720, 1.25], [720, 1.5], [576, 1.25], [480, 1.5], [375, 1]]) {
     const context = await browser.newContext({ viewport: { width, height: 820 }, deviceScaleFactor: scale, locale: 'en-US' });
@@ -32,9 +38,30 @@ try {
       page.on('pageerror', error => errors.push(error.message));
       // Vite 的 HMR 长连接不作为界面就绪条件；等待实际控件可操作。
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.locator('#nav-settings').click();
+      for (const language of ['zh-CN', 'en']) {
+        await page.locator('#language').selectOption(language);
+        assert.equal(await page.locator('html').getAttribute('lang'), language);
+        assert.equal(await page.locator('#autostart').isChecked(), false, '默认自启动保持关闭');
+        assert.equal(await page.locator('#autostart').isDisabled(), true, '浏览器预览不得修改桌面自启动');
+        assert.ok((await page.locator('#autostart-help').textContent()).trim().length > 0);
+        const layout = await page.evaluate(() => ({
+          width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+          outside: [...document.querySelectorAll('#settings-panel button, #settings-panel input, #settings-panel select')].filter(element => {
+            const box = element.getBoundingClientRect();
+            return box.width > 0 && box.height > 0 && (box.left < -1 || box.right > innerWidth + 1 || element.scrollWidth > element.clientWidth + 2);
+          }).map(element => element.id || element.tagName)
+        }));
+        assert.ok(layout.documentWidth <= layout.width + 1, JSON.stringify({ width, language, layout }));
+        assert.deepEqual(layout.outside, [], JSON.stringify({ width, language, layout }));
+        const screenshot = `ui-${width}-${scale}-settings-${language}.png`;
+        await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'settings', language, no_horizontal_overflow: true, autostart_default_off: true, browser_autostart_disabled: true, screenshot });
+      }
+      await page.locator('#nav-vault').click();
       if (width === 1080) {
         for (const language of ['zh-CN', 'en']) {
-          await page.locator('#language').selectOption(language);
+          await selectLanguage(page, language);
           const add = await page.locator('#add-to-queue').boundingBox();
           assert.ok(add && add.y >= 0 && add.y + add.height <= 820, '默认窗口中加入队列必须在首屏完整可见');
           assert.equal(await page.getByRole('group', { name: language === 'zh-CN' ? '加密包操作' : 'Package operation' }).count(), 1);
@@ -42,7 +69,7 @@ try {
           checks.push({ css_width: width, language, initial_add_action_above_fold: true, named_operation_group: true });
         }
       }
-      await page.locator('#language').selectOption('en');
+      await selectLanguage(page, 'en');
       assert.equal(await page.locator('.queue-overview').isVisible(), false, '空队列不应在主要操作前重复显示摘要');
       await page.locator('#manual-sources > summary').click();
       for (const operation of ['encrypt', 'decrypt', 'verify']) {
@@ -52,9 +79,13 @@ try {
         await page.locator('#password').fill('public-layout-test-only');
         if (operation === 'encrypt') await page.locator('#confirm-password').fill('public-layout-test-only');
         for (const language of ['zh-CN', 'en']) {
-          await page.locator('#language').selectOption(language);
+          await selectLanguage(page, language);
           assert.equal(await page.locator('html').getAttribute('lang'), language);
           assert.equal(await page.locator('#input-path').inputValue(), source);
+          assert.equal(await page.locator('#password').inputValue(), '', '页面跳转后清空口令');
+          assert.equal(await page.locator('#confirm-password').inputValue(), '', '页面跳转后清空确认口令');
+          await page.locator('#password').fill('public-layout-test-only');
+          if (operation === 'encrypt') await page.locator('#confirm-password').fill('public-layout-test-only');
           assert.equal(await page.locator('#password').inputValue(), 'public-layout-test-only');
           if (operation === 'encrypt') assert.equal(await page.locator('#confirm-password').inputValue(), 'public-layout-test-only');
           assert.equal(await page.locator('#source-list > li').count(), 2);
@@ -80,7 +111,7 @@ try {
       await page.locator('#nav-attributes').click();
       assert.equal(await page.locator('#page-title').evaluate(element => element === document.activeElement), true, '导航后聚焦新页面标题');
       for (const language of ['zh-CN', 'en']) {
-        await page.locator('#language').selectOption(language);
+        await selectLanguage(page, language);
         await page.evaluate(() => scrollTo(0, 0));
         assert.equal(await page.locator('#attribute-form').isVisible(), false, '添加表单默认收起');
         const addEntry = await page.locator('#pick-attribute-file').boundingBox();
@@ -215,6 +246,7 @@ try {
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
         checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, one_restore_entry_point_with_confirmation_on_conflict: true, screenshot });
       }
+      await page.locator('#nav-settings').click();
       await page.locator('#language').focus();
       await page.keyboard.press('Tab');
       assert.equal(await page.evaluate(() => {
@@ -222,6 +254,7 @@ try {
         return element !== document.body && parseFloat(getComputedStyle(element).outlineWidth) >= 2;
       }), true, '键盘焦点必须可见');
       await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.locator('#nav-settings').click();
       assert.equal(await page.locator('#language').inputValue(), 'en', '重启保留语言偏好');
       assert.equal(await page.locator('#package-preview').isVisible(), false, '预览不持久保存');
     } finally {
@@ -236,7 +269,7 @@ try {
     const page = await queuedContext.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.locator('#language').selectOption('zh-CN');
+    await selectLanguage(page, 'zh-CN');
     assert.equal(await page.locator('#queue-overview').isVisible(), false, '只有完成历史时不重复显示顶部摘要');
     assert.equal(await page.locator('#queue-controls').isVisible(), false, '没有待处理任务时隐藏空队列控制');
     assert.equal(await page.locator('#queue-summary').isVisible(), true, '任务汇总保留在队列区域');

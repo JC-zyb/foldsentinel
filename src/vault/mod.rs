@@ -15,7 +15,7 @@ pub(crate) use legacy::reject_link;
 pub use preview::{MAX_PREVIEW_ENTRIES, PackagePreview, PreviewEntry, VaultInspection};
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -507,8 +507,7 @@ fn process_directory(
     }
     let (limit, entries) = expected.unwrap_or((legacy::MAX_PLAINTEXT as u64, 10_000));
     let mut archive = tar::Archive::new(&mut *source);
-    let mut seen = BTreeSet::new();
-    let mut files = Vec::new();
+    let mut seen: BTreeMap<String, bool> = BTreeMap::new();
     let mut total = 0u64;
     let mut count = 0;
     let mut names = 0;
@@ -545,15 +544,42 @@ fn process_directory(
         let name = relative.to_str().context("归档包含非 Unicode 路径")?;
         names += name.len();
         ensure!(name.len() <= 4096 && names <= MAX_NAMES, "归档路径超限");
-        let key = relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
-            .collect::<Vec<_>>()
-            .join("/");
-        ensure!(seen.insert(key.clone()), "归档存在重复路径");
-        if kind.is_file() {
-            files.push(key);
+        let mut key = String::with_capacity(name.len());
+        for component in relative.components() {
+            if !key.is_empty() {
+                key.push('/');
+            }
+            key.extend(
+                component
+                    .as_os_str()
+                    .to_str()
+                    .expect("validated Unicode archive path")
+                    .chars()
+                    .flat_map(char::to_lowercase),
+            );
         }
+        let mut ancestor_end = key.len();
+        while let Some(separator) = key[..ancestor_end].rfind('/') {
+            ensure!(
+                seen.get(&key[..separator]) != Some(&true),
+                "归档文件与目录冲突"
+            );
+            ancestor_end = separator;
+        }
+        if kind.is_file() {
+            let prefix = format!("{key}/");
+            ensure!(
+                !seen
+                    .range(prefix.clone()..)
+                    .next()
+                    .is_some_and(|(name, _)| name.starts_with(&prefix)),
+                "归档文件与目录冲突"
+            );
+        }
+        ensure!(
+            seen.insert(key, kind.is_file()).is_none(),
+            "归档存在重复路径"
+        );
         if preview.is_none() {
             control.current(name);
         }
@@ -586,17 +612,6 @@ fn process_directory(
         if let Some(preview) = preview.as_mut() {
             preview.record(Some(name), kind.is_dir(), entry.size());
         }
-    }
-    for file in files {
-        control.check()?;
-        let prefix = format!("{file}/");
-        ensure!(
-            !seen
-                .range(prefix.clone()..)
-                .next()
-                .is_some_and(|name| name.starts_with(&prefix)),
-            "归档文件与目录冲突"
-        );
     }
     ensure!(
         expected.is_none_or(|(size, entries)| count == entries && total == size)

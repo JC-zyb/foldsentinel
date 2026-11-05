@@ -588,6 +588,27 @@ fn verification_rejects_archive_file_parent_conflicts() {
             .is_err()
         );
     }
+
+    let mut archive = tar::Builder::new(Vec::new());
+    for path in ["Ä/Leaf", "ä/leaf"] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o600);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_cksum();
+        archive.append_data(&mut header, path, &[][..]).unwrap();
+    }
+    let source = archive.into_inner().unwrap();
+    assert!(
+        process_directory(
+            &mut &source[..],
+            None,
+            Some((0, 2)),
+            &control(dir.path()),
+            None
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -10,6 +10,8 @@ Status: implemented
 
 `verify-versions.mjs` 校验 Cargo、npm、两个锁文件、Tauri 配置及界面版本。CI 在构建前运行，打包脚本再次运行以覆盖本地发布。`verify-artifacts.ps1` 检查两个指定版本产物、校验和行数与散列、ZIP 必需文件、重复条目及不安全路径。产物按版本放入 `artifacts/<version>/`，保留旧版本包。
 
+[服务部署修复](../bug-fix/2026-11-05-service-installation.md)要求先构建 CLI/服务，再以 `tauri.bundle.conf.json` 将服务载荷加入 NSIS。GUI 构建绑定服务 SHA-256，正式打包额外核对 ZIP 服务散列与生成 NSIS 的安装/删除指令；这些脚本检查不能替代实际解包、UAC 或 SCM 验收。
+
 实际安装、升级、Runtime 缺失与卷写满的验证独立记录通过条件和缺失环境；编译、模拟写入器和干净 runner 构建不替代这些验证。未经实际执行的条目保持待验证，发布以同一提交的 Windows CI 为准。
 
 `validate-volume.ps1` 仅在管理员上下文新建随机路径的 128 MiB VHD，通过镜像路径、容量、RAW 分区与非系统盘断言后初始化；不接收物理磁盘编号，最终显式确认卸载。真实 OS 写满验证要求一次性卷标记及容量上限。`validate-install.ps1` 仅允许 GitHub runner，在私有目录依次测试当前版本新装、v0.4 安装、升级及默认卸载；旧安装器固定 SHA-256。GUI 以隐藏方式启动，通过所属 WebView2 子进程及持续存活验证，避免把隐藏窗口的 MainWindowHandle 当作可见窗口；数据目录哨兵证明保留目录，二者不能推出交互、偏好语义或缺失 Runtime 已通过。
@@ -23,6 +25,8 @@ Vite 开发监听排除 `target` 构建目录、`work` 隔离测试目录和 `ar
 历史审计：[日常流程](../architecture/2026-10-24-daily-workflows.md) 部分重叠，仅描述产品行为及历史兼容；[流式任务](../architecture/2026-10-24-streaming-v2.md) 部分重叠，仅约束输出与恢复边界。两篇均保留。本篇归属构建与验证门禁，不改变格式；首版和属性恢复笔记无关。
 
 ## Alternatives considered
+
+应用内手动查询属于独立的[更新检查](../feature/2026-11-05-manual-update-check.md)决定；此处继续约束实际发布和产物，不因查询可用就视为已发布或已验证升级。
 
 - 仅靠发布前手工核对最省实现，但无法阻止不同清单与锁文件发生漂移；增加无依赖脚本作为本地和 CI 共用入口。
 - 每次构建删除整个 artifacts 目录可避免混包，但会丢失先前版本及验证材料；改为版本目录，并检查本次两个明确文件。

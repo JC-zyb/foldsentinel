@@ -209,7 +209,7 @@ fn prepare(args: &Args) -> Result<i32> {
         if !confirm_force(error) {
             bail!("用户取消强制卸载");
         }
-        if service::is_installed()? {
+        if service::uninstall_required()? {
             ensure!(
                 elevate_service_remove(true, false) == EXIT_OK,
                 "独立服务未能卸载，已保留程序与恢复资料"
@@ -227,7 +227,7 @@ fn audit_normal(data_dir: &Path, silent: bool) -> Result<()> {
     let cache = cache_dir()?;
     cache_entries(&cache)?;
     audit_local(data_dir)?;
-    if service::is_installed()? {
+    if service::uninstall_required()? {
         ensure!(
             elevate_service_remove(false, silent) == EXIT_OK,
             "保护服务仍有登记、无法完成全账户审计，或管理员卸载未完成"
@@ -347,7 +347,7 @@ fn finish(args: &Args) -> Result<i32> {
         args,
         &lifecycle::default_data_dir()?,
         &cache_dir()?,
-        service::is_installed,
+        service::uninstall_required,
     )
 }
 
@@ -360,7 +360,10 @@ fn finish_at(
     ensure!(args.parent_pid != 0, "缺少卸载器进程标识");
     let (guard, session) = lifecycle::UninstallGuard::resume(data_dir, args.parent_pid)?;
     if !session.forced {
-        ensure!(!installed()?, "独立服务仍存在，拒绝清理应用状态");
+        ensure!(
+            !installed()?,
+            "独立服务或其程序目录仍存在，拒绝清理应用状态"
+        );
         validate_local_state(data_dir)?;
         let cached = cache_entries(cache)?;
         remove_cache_entries(cache, cached)?;
@@ -801,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_state_or_service_at_finish_preserves_recovery_records() {
+    fn changed_state_or_service_cleanup_at_finish_preserves_recovery_records() {
         let (_root, data, _inputs, cache) = fixture();
         fs::write(
             data.join(vault::inventory::INDEX_FILE),
@@ -811,6 +814,8 @@ mod tests {
         audit_local(&data).unwrap();
         let args = arm(&data, false);
         assert!(finish_at(&args, &data, &cache, || Ok(true)).is_err());
+        assert!(data.join("vault-inventory.json").exists());
+        assert!(finish_at(&args, &data, &cache, || bail!("无法查询服务清理状态")).is_err());
         assert!(data.join("vault-inventory.json").exists());
         fs::write(data.join("unexpected"), b"keep").unwrap();
         assert!(finish_at(&args, &data, &cache, || Ok(false)).is_err());

@@ -1,6 +1,6 @@
 [package]
 name = "foldsentinel-desktop"
-version = "0.8.0"
+version = "0.9.1"
 edition = "2024"
 license = "MIT"
 default-run = "FoldSentinel"
@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+sha2 = "0.10"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -20,8 +21,9 @@ serde = { version = "1", features = ["derive"] }
 zeroize = "1.8"
 anyhow = "1.0"
 serde_json = "1.0"
+semver = "1"
 walkdir = "2.5"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinHttp", "Win32_Security", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"

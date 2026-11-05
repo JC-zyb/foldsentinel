@@ -20,4 +20,5 @@ for (const name of ['foldsentinel', 'foldsentinel-desktop']) {
   assert.equal(block?.match(/\nversion = "([^"]+)"/)?.[1], version, `Cargo lock ${name}`);
 }
 assert.ok(read('ui/i18n.ts').includes(`v${version}`), 'UI version');
+assert.equal(read('ui/main.ts').match(/id="settings-app-version">v([^<]+)<\/span>/)?.[1], version, 'Settings app version');
 console.log(`Version consistency OK: ${version}`);

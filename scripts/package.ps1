@@ -6,10 +6,10 @@ try {
     & node (Join-Path $PSScriptRoot 'verify-versions.mjs')
     if ($LASTEXITCODE -ne 0) { throw '版本检查失败' }
     if (-not $SkipBuild) {
-        & npm.cmd run tauri build
-        if ($LASTEXITCODE -ne 0) { throw '桌面构建失败' }
         & cargo build --release --locked -p foldsentinel
         if ($LASTEXITCODE -ne 0) { throw 'CLI 与保护服务构建失败' }
+        & npm.cmd run tauri build -- --config src-tauri/tauri.bundle.conf.json
+        if ($LASTEXITCODE -ne 0) { throw '桌面与服务安装包构建失败' }
     }
     $version = (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
     $artifactDirectory = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory, $projectRoot) } else { Join-Path $projectRoot "artifacts/$version" }
@@ -29,7 +29,7 @@ try {
         "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
     }
     [System.IO.File]::WriteAllLines((Join-Path $artifactDirectory 'SHA256SUMS.txt'), [string[]]$hashes, [System.Text.UTF8Encoding]::new($false))
-    & (Join-Path $PSScriptRoot 'verify-artifacts.ps1') -Directory $artifactDirectory
+    & (Join-Path $PSScriptRoot 'verify-artifacts.ps1') -Directory $artifactDirectory -VerifyBuildPayload
     Get-ChildItem -LiteralPath $artifactDirectory -File | Select-Object Name, Length
 } finally {
     Pop-Location

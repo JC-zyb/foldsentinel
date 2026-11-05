@@ -1,9 +1,11 @@
 import { errorText, failureCode, language, t, type MessageKey } from './i18n';
 import { validProtectionNote } from './protection-workflow';
-import { clearManagedCommand, managedStatus, requestManaged, validManagedPassword, type ManagedCommand, type ManagedMode, type ServiceRoot, type ServiceStatus, type ServiceTransport } from './managed-workflow';
+import { clearManagedCommand, managedStatus, requestManaged, serviceInstallationState, serviceInstallResult, validManagedPassword, type ManagedCommand, type ManagedMode, type ServiceInstallationState, type ServiceRoot, type ServiceStatus, type ServiceTransport } from './managed-workflow';
 
 interface ManagedOptions {
   request: (command: ManagedCommand) => Promise<unknown>;
+  installationStatus?: () => Promise<unknown>;
+  installService?: () => Promise<unknown>;
   run: (action: () => Promise<void>) => Promise<void>;
   isDesktop: () => boolean;
   isBlocked: () => boolean;
@@ -17,8 +19,11 @@ const nameOnly = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).po
 export class ManagedProtectionUi {
   private snapshot: ServiceStatus | null = null;
   private transport: ServiceTransport | null = null;
+  private installation: ServiceInstallationState | null = null;
   private stale = false;
   private loading = false;
+  private installing = false;
+  private installFeedback: Feedback | null = null;
   private available = false;
   private visible = false;
   private editor: { kind: EditorKind; root?: ServiceRoot } | null = null;
@@ -39,6 +44,23 @@ export class ManagedProtectionUi {
   private paragraph(text: string, className = 'field-help'): HTMLParagraphElement { const p = document.createElement('p'); p.className = className; p.textContent = text; return p; }
   private feedbackText(feedback: Feedback): string { return feedback.code === 'authentication' ? t('managedAuthenticationFailed') : feedback.code ? errorText(feedback.code) : t(feedback.key!, feedback.values); }
 
+  private statusText(): string {
+    if (!this.options.isDesktop()) return t('managedServicePreview');
+    if (this.installing) return t('managedServiceInstalling');
+    if (this.available) return t(this.transport?.healthy ? 'managedServiceConnected' : 'managedServiceDegraded');
+    const reason = this.installation ? t(({
+      absent: 'managedServiceAbsent', stopped: 'managedServiceStopped', starting: 'managedServiceStarting',
+      running: 'managedServiceUnverified', stopping: 'managedServiceStopping', invalid: 'managedServiceInvalid', inaccessible: 'managedServiceInaccessible',
+    } as const)[this.installation]) : t('managedServiceUnavailable');
+    return this.snapshot ? `${t('managedServiceLost')} ${reason}` : reason;
+  }
+
+  private async readInstallationStatus(): Promise<void> {
+    if (!this.options.installationStatus) { this.installation = null; return; }
+    try { this.installation = serviceInstallationState(await this.options.installationStatus()); }
+    catch (error) { this.installation = 'inaccessible'; console.error('Could not read protection service installation status', error); }
+  }
+
   clearPasswords(): void { this.container.querySelectorAll<HTMLInputElement>('input[type=password]').forEach(input => { input.value = ''; }); }
   translate(): void { this.clearPasswords(); this.editor = null; this.editorOrigin = null; this.render(); }
   setVisible(visible: boolean): void {
@@ -47,7 +69,7 @@ export class ManagedProtectionUi {
     else if (this.options.isDesktop()) { void this.refresh(); }
   }
   sync(): void {
-    const blocked = this.options.isBlocked() || this.loading;
+    const blocked = this.options.isBlocked() || this.loading || this.installing;
     if (this.options.isBlocked()) this.clearPasswords();
     const actionsBlocked = blocked || !this.available || this.stale;
     this.container.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = blocked; });
@@ -55,10 +77,15 @@ export class ManagedProtectionUi {
     const fieldset = this.container.querySelector<HTMLFieldSetElement>('fieldset'); if (fieldset) fieldset.disabled = actionsBlocked;
     const search = this.container.querySelector<HTMLInputElement>('#managed-search'); if (search) search.disabled = blocked;
     const refresh = this.container.querySelector<HTMLButtonElement>('#managed-refresh'); if (refresh) refresh.disabled = blocked || !this.options.isDesktop();
-    if (this.loading) this.element('managed-service-status').textContent = t('managedConnecting');
+    const install = this.container.querySelector<HTMLButtonElement>('#managed-install');
+    if (install) {
+      install.disabled = blocked || !this.options.isDesktop() || !this.options.installService || this.installation !== 'absent';
+      install.textContent = t(this.installing ? 'managedServiceInstallingButton' : 'managedInstallService');
+    }
+    if (this.installing || this.loading) this.element('managed-service-status').textContent = t(this.installing ? 'managedServiceInstalling' : 'managedConnecting');
     const previous = this.container.querySelector<HTMLButtonElement>('#managed-previous'); if (previous) previous.disabled = blocked || this.offset === 0;
     const next = this.container.querySelector<HTMLButtonElement>('#managed-next'); if (next) next.disabled = blocked || this.offset + 50 >= this.filtered().length;
-    this.container.setAttribute('aria-busy', String(this.loading));
+    this.container.setAttribute('aria-busy', String(this.loading || this.installing));
   }
 
   private schedulePoll(): void {
@@ -69,11 +96,11 @@ export class ManagedProtectionUi {
       this.poll = null;
       // 编辑密码时不做自动重绘；手动刷新会明确结束编辑并清空密码。
       const editingSearch = document.activeElement instanceof HTMLInputElement && this.container.contains(document.activeElement);
-      if (this.editor || editingSearch || this.options.isBlocked()) this.schedulePoll(); else void this.refresh(true);
+      if (this.editor || editingSearch || this.installing || this.options.isBlocked()) this.schedulePoll(); else void this.refresh(true);
     }, 5000);
   }
   async refresh(automatic = false): Promise<void> {
-    if (this.loading || this.options.isBlocked() || !this.options.isDesktop()) return;
+    if (this.loading || this.installing || this.options.isBlocked() || !this.options.isDesktop()) return;
     const focus = this.activeFocus();
     const focusedElement = document.activeElement;
     if (!automatic) { this.clearPasswords(); this.editor = null; this.editorOrigin = null; }
@@ -81,13 +108,16 @@ export class ManagedProtectionUi {
     try {
       const response = await requestManaged({ action: 'status' }, this.options.request);
       this.snapshot = managedStatus(response.data); this.transport = response.transport;
-      this.available = true; this.stale = false;
+      this.available = true; this.stale = false; this.installation = 'running';
+      if (this.installFeedback?.key === 'managedServiceInstallUnverified') this.installFeedback = { key: 'managedServiceInstalled' };
       if (this.feedback?.key === 'managedRefreshFailed' || this.feedback?.code === 'service_unavailable') this.feedback = null;
       this.offset = Math.min(this.offset, Math.max(0, Math.ceil(this.filtered().length / 50) - 1) * 50);
     } catch (error) {
       this.available = false; this.stale = !!this.snapshot;
+      if (this.installFeedback?.key === 'managedServiceInstalled') this.installFeedback = { key: 'managedServiceInstallUnverified', error: true };
       if (!this.snapshot) this.transport = null;
-      this.feedback = this.snapshot ? { key: 'managedRefreshFailed', error: true } : { code: failureCode(error), error: true };
+      await this.readInstallationStatus();
+      this.feedback = this.snapshot ? { key: 'managedRefreshFailed', error: true } : this.installation ? null : { code: failureCode(error), error: true };
     } finally {
       this.loading = false;
       // 禁用按钮会让浏览器清除焦点；用户已转到其他控件时不再拉回。
@@ -96,6 +126,39 @@ export class ManagedProtectionUi {
       if (restoreDisabledFocus) this.restoreFocus(focus);
       this.schedulePoll();
     }
+  }
+  private async installService(): Promise<void> {
+    if (this.installing || this.loading || this.options.isBlocked() || !this.options.isDesktop() || !this.options.installService || this.installation !== 'absent') return;
+    const focus = this.activeFocus(); const focusedElement = document.activeElement;
+    this.clearPasswords(); this.editor = null; this.editorOrigin = null; this.installFeedback = null;
+    this.container.querySelector('#managed-install-feedback')?.remove();
+    if (this.poll) clearTimeout(this.poll); this.poll = null;
+    this.installing = true; this.sync();
+    let installed = false;
+    try {
+      await this.options.run(async () => {
+        // runUi 会显示未处理错误，因此在此保留安装结果供本区域反馈和重试。
+        try {
+          const result = serviceInstallResult(await this.options.installService!());
+          installed = result.status === 'installed';
+          if (!installed) this.installFeedback = { key: 'managedServiceInstallCancelled' };
+        } catch (error) {
+          console.error('Could not install protection service', error);
+          this.installFeedback = { key: 'managedServiceInstallFailed', error: true };
+        }
+      });
+    } catch (error) {
+      console.error('Could not run protection service installation', error);
+      this.installFeedback = { key: 'managedServiceInstallFailed', error: true };
+    } finally { this.installing = false; }
+    if (!installed && !this.installFeedback) this.installFeedback = { key: 'managedServiceInstallFailed', error: true };
+    // 全局忙状态释放后核对真实连接；安装返回成功不能直接启用登记入口。
+    await this.refresh();
+    if (installed) this.installFeedback = { key: this.available ? 'managedServiceInstalled' : 'managedServiceInstallUnverified', error: !this.available };
+    const restoreDisabledFocus = focus && (document.activeElement === document.body || document.activeElement === focusedElement || document.activeElement === this.element('managed-title'));
+    this.render();
+    if (restoreDisabledFocus) this.restoreFocus(focus);
+    this.schedulePoll();
   }
   private filtered(): ServiceRoot[] {
     const query = this.query.toLowerCase();
@@ -149,9 +212,10 @@ export class ManagedProtectionUi {
       // 变更失败也读取服务实际状态；不能用刷新错误覆盖原操作错误。
       try {
         const response = await requestManaged({ action: 'status' }, this.options.request);
-        this.snapshot = managedStatus(response.data); this.transport = response.transport; this.available = true; this.stale = false;
+        this.snapshot = managedStatus(response.data); this.transport = response.transport; this.available = true; this.stale = false; this.installation = 'running';
       } catch {
         this.stale = true; this.available = false;
+        await this.readInstallationStatus();
         if (changed) this.feedback = { key: 'managedSucceededRefreshFailed', error: true };
       }
       this.render();
@@ -167,12 +231,20 @@ export class ManagedProtectionUi {
     const header = document.createElement('div'); header.className = 'records-heading';
     const heading = document.createElement('h2'); heading.id = 'managed-title'; heading.tabIndex = -1; heading.textContent = t('managedTitle');
     const refresh = this.button('refreshServiceStatus', () => { void this.refresh(); }); refresh.id = 'managed-refresh'; refresh.dataset.focusAction = 'refresh'; header.append(heading, refresh); this.container.append(header);
-    const status = this.paragraph(this.options.isDesktop() ? !this.available ? t(this.snapshot ? 'managedServiceLost' : 'managedServiceUnavailable') : t(this.transport?.healthy ? 'managedServiceConnected' : 'managedServiceDegraded') : t('managedServicePreview'), 'managed-service-status');
+    const status = this.paragraph(this.statusText(), 'managed-service-status');
     status.id = 'managed-service-status'; status.setAttribute('role', 'status'); this.container.append(status);
+    if (this.installation === 'absent' || this.installing) {
+      const setup = document.createElement('div'); setup.className = 'managed-service-install';
+      const install = this.button('managedInstallService', () => { void this.installService(); }, true);
+      install.id = 'managed-install'; install.dataset.focusAction = 'install'; install.setAttribute('aria-describedby', 'managed-install-help');
+      const help = this.paragraph(t('managedServiceInstallPrompt')); help.id = 'managed-install-help';
+      setup.append(install, help); this.container.append(setup);
+    }
     if (this.transport?.last_tick_error) this.container.append(this.paragraph(errorText(this.transport.last_tick_error), 'managed-service-error'));
     const details = document.createElement('details'); details.className = 'managed-service-help'; details.open = helpOpen;
     const summary = document.createElement('summary'); summary.dataset.focusAction = 'service-help'; summary.textContent = t('managedServiceDetails'); details.append(summary, this.paragraph(t('managedServiceInstallHelp')), this.paragraph(t('managedServiceScope')), this.paragraph(t('managedServicePasswordBoundary'))); this.container.append(details);
     if (this.feedback) { const feedback = this.paragraph(this.feedbackText(this.feedback), `protection-feedback${this.feedback.error ? ' error' : ''}`); feedback.id = 'managed-feedback'; feedback.setAttribute('role', this.feedback.error ? 'alert' : 'status'); this.container.append(feedback); }
+    if (this.installFeedback) { const feedback = this.paragraph(this.feedbackText(this.installFeedback), `protection-feedback${this.installFeedback.error ? ' error' : ''}`); feedback.id = 'managed-install-feedback'; feedback.setAttribute('role', this.installFeedback.error ? 'alert' : 'status'); this.container.append(feedback); }
     const tools = document.createElement('div'); tools.className = 'managed-tools';
     const add = this.button('managedAdd', () => this.open('enroll'), true); add.id = 'managed-add'; add.dataset.managedAction = 'enroll'; tools.append(add);
     const search = document.createElement('form'); search.className = 'protection-search'; search.setAttribute('role', 'search');
@@ -183,7 +255,7 @@ export class ManagedProtectionUi {
     tools.append(search); this.container.append(tools);
     if (this.editor) this.renderEditor();
     const roots = this.filtered(); const list = document.createElement('ul'); list.id = 'managed-root-list';
-    if (!roots.length) list.append(this.paragraph(t(this.snapshot?.registered ? 'noProtectionMatches' : 'managedEmpty'), 'empty-records'));
+    if (!roots.length) list.append(this.paragraph(t(!this.snapshot && !this.available ? 'managedListUnavailable' : this.snapshot?.registered ? 'noProtectionMatches' : 'managedEmpty'), 'empty-records'));
     for (const root of roots.slice(this.offset, this.offset + 50)) list.append(this.renderRoot(root));
     this.container.append(list);
     if (roots.length) {

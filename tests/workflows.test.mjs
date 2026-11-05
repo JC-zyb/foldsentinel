@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, serializeHistory } from '../ui/tasks.ts';
+import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, outputParent, serializeHistory } from '../ui/tasks.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
 import { previewPage, PREVIEW_PAGE_SIZE } from '../ui/preview.ts';
 import { ProtectionRecords, runProtectionAction, runProtectionBatch, validProtectionNote } from '../ui/protection-workflow.ts';
@@ -18,6 +18,16 @@ test('separate selections accumulate files and folders without duplicate Windows
   assert.deepEqual(mergeSourcePaths([String.raw`\\server\share\资料`], [String.raw`\\?\UNC\server\share\资料`]), [String.raw`\\server\share\资料`]);
   assert.deepEqual(mergeSourcePaths(secondDrop, []), secondDrop);
   assert.deepEqual(firstDrop, [file]);
+});
+
+test('retry output folders preserve drive roots and handle UNC paths', () => {
+  assert.equal(outputParent('C:\\out.fse'), 'C:\\');
+  assert.equal(outputParent('C:\\dir\\out.fse'), 'C:\\dir');
+  assert.equal(outputParent('\\\\server\\share\\out.fse'), '\\\\server\\share');
+  assert.equal(outputParent('\\\\?\\C:\\out.fse'), '\\\\?\\C:\\');
+  assert.equal(outputParent('D:/dir/out.fse'), 'D:\\dir');
+  assert.equal(outputParent('\\out.fse'), '\\');
+  assert.equal(outputParent(null), '');
 });
 
 test('queue is serial, continues after failures, forgets passwords and reloads interrupted work', async () => {

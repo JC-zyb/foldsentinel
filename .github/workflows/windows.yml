@@ -39,6 +39,8 @@ jobs:
       - run: ./scripts/package.ps1
       - name: Isolated NSIS uninstall-hook validation
         run: ./scripts/validate-uninstall-hooks.ps1 -Report ./v08-uninstall-hooks-windows-x64.json
+      - name: Isolated NSIS service-install-hook validation
+        run: ./scripts/validate-service-install-hooks.ps1 -Report ./v091-service-install-hooks-windows-x64.json
       - name: Installer upgrade and uninstall smoke
         run: ./scripts/validate-install.ps1 -Report ./v08-install-windows-x64.json
       - uses: actions/upload-artifact@v6
@@ -49,6 +51,7 @@ jobs:
             v04-io-windows-x64.json
             v08-install-windows-x64.json
             v08-uninstall-hooks-windows-x64.json
+            v091-service-install-hooks-windows-x64.json
             v08-service-uninstall-windows-x64.json
             v08-attributes-windows-x64.json
           if-no-files-found: warn

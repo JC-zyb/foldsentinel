@@ -448,16 +448,15 @@ impl ManagedStore {
     }
 
     fn discover(&mut self, id: &str) -> Result<()> {
-        let root = self.root(id)?.clone();
+        let root = self.root(id)?;
         let root_entry = root
             .entries
             .get(&root.path)
             .context(vault::ErrorCode::ProtectionConflict)?;
         let held_root = checked_object(&root.path, &root.path, Some(root_entry.plan.identity))?;
-        verify_parent(&root)?;
-        let mut next = self.data.clone();
+        verify_parent(root)?;
         let mut held = vec![held_root];
-        let mut changed = false;
+        let mut discovered = Vec::new();
         for entry in WalkDir::new(&root.path).follow_links(false) {
             let entry = entry.context(vault::ErrorCode::ReadFailed)?;
             let path = path_key(entry.path());
@@ -472,23 +471,24 @@ impl ManagedStore {
                     &self.data.user_sid,
                 )?;
                 let original_attributes = object.attributes()?;
-                let target = next.roots.get_mut(id).expect("known root");
-                if target.entries.len() >= MAX_ENTRIES {
+                if root.entries.len() + discovered.len() >= MAX_ENTRIES {
                     bail!(vault::ErrorCode::ProtectionInput);
                 }
-                target.entries.insert(
+                discovered.push((
                     path.clone(),
                     Entry {
                         path,
                         plan,
                         original_attributes,
                     },
-                );
-                changed = true;
+                ));
             }
             held.push(object);
         }
-        if changed {
+        if !discovered.is_empty() {
+            let mut next = self.data.clone();
+            let target = next.roots.get_mut(id).expect("known root");
+            target.entries.extend(discovered);
             self.commit(next)?;
         }
         Ok(())

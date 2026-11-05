@@ -1,6 +1,6 @@
 [package]
 name = "foldsentinel"
-version = "0.8.0"
+version = "0.9.1"
 edition = "2024"
 description = "Open-source Windows folder protection and encrypted vault tooling."
 license = "MIT"
@@ -41,6 +41,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Services",

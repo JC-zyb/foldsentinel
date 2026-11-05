@@ -24,6 +24,9 @@ use windows_sys::Win32::{
     UI::Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles, SHGetKnownFolderPath},
 };
 
+mod install;
+pub(super) use install::{install_from, installation_state};
+
 const SYSTEM_SID: &str = "S-1-5-18";
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -146,6 +149,22 @@ pub(super) fn service_is_installed() -> Result<bool> {
     Ok(true)
 }
 
+fn program_cleanup_required(directory: &Path) -> Result<bool> {
+    match fs::symlink_metadata(directory) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok(true),
+        Err(error) => Err(error).context(ErrorCode::ServiceUnavailable),
+    }
+}
+
+pub(super) fn service_uninstall_required() -> Result<bool> {
+    if service_is_installed()? {
+        return Ok(true);
+    }
+    program_cleanup_required(&program_files_directory()?)
+}
+
 fn require_administrator() -> Result<()> {
     let mut token = null_mut();
     unsafe {
@@ -256,7 +275,7 @@ fn has_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-fn verify_program_directory(directory: &Path) -> Result<PathBuf> {
+fn program_binary_in_directory(directory: &Path) -> Result<Option<PathBuf>> {
     let metadata = fs::symlink_metadata(directory).context(ErrorCode::ServiceUnavailable)?;
     if !metadata.is_dir() || has_reparse_point(&metadata) {
         bail!(ErrorCode::ProtectionConflict);
@@ -268,10 +287,7 @@ fn verify_program_directory(directory: &Path) -> Result<PathBuf> {
         }
     }
     let binary = directory.join("foldsentinel-service.exe");
-    let binary_metadata = fs::symlink_metadata(&binary).context(ErrorCode::ServiceUnavailable)?;
-    if !binary_metadata.is_file() || has_reparse_point(&binary_metadata) {
-        bail!(ErrorCode::ProtectionConflict);
-    }
+    let mut has_binary = false;
     for entry in fs::read_dir(directory).context(ErrorCode::ServiceUnavailable)? {
         let entry = entry.context(ErrorCode::ServiceUnavailable)?;
         let entry_metadata =
@@ -282,12 +298,24 @@ fn verify_program_directory(directory: &Path) -> Result<PathBuf> {
         {
             bail!(ErrorCode::ProtectionConflict);
         }
+        has_binary = true;
     }
-    Ok(binary)
+    Ok(has_binary.then_some(binary))
 }
 
-fn remove_program_directory(directory: &Path, binary: &Path) -> Result<()> {
-    fs::remove_file(binary).context(ErrorCode::ServiceUnavailable)?;
+fn verify_program_directory(directory: &Path) -> Result<PathBuf> {
+    program_binary_in_directory(directory)?.context(ErrorCode::ProtectionConflict)
+}
+
+fn remove_program_directory(directory: &Path) -> Result<()> {
+    if !program_cleanup_required(directory)? {
+        return Ok(());
+    }
+    // 注销成功后文件删除仍可能被占用阻止；重试允许已经删掉程序的空目录。
+    // 先核对整个目录，再只删除固定程序和空目录，未知内容始终保留并报错。
+    if let Some(binary) = program_binary_in_directory(directory)? {
+        fs::remove_file(binary).context(ErrorCode::ServiceUnavailable)?;
+    }
     if fs::read_dir(directory)
         .context(ErrorCode::ServiceUnavailable)?
         .next()
@@ -425,7 +453,6 @@ fn normal_stop_required(
 fn uninstall_service(forced: bool) -> Result<()> {
     require_administrator()?;
     let directory = program_files_directory()?;
-    let binary = verify_program_directory(&directory)?;
     let manager = unsafe { OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT) };
     if manager.is_null() {
         return Err(std::io::Error::last_os_error()).context(ErrorCode::ServiceUnavailable);
@@ -445,11 +472,12 @@ fn uninstall_service(forced: bool) -> Result<()> {
     if service.is_null() {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) {
-            bail!(ErrorCode::ServiceUnavailable);
+            return remove_program_directory(&directory);
         }
         return Err(error).context(ErrorCode::ServiceUnavailable);
     }
     let service_guard = IdentityServiceHandle(service);
+    let binary = verify_program_directory(&directory)?;
     let expected = format!("\"{}\"", binary.display());
     let registered = service_binary_path(service_guard.0)?;
     if !registered.eq_ignore_ascii_case(&expected) {
@@ -506,7 +534,7 @@ fn uninstall_service(forced: bool) -> Result<()> {
     }
     drop(service_guard);
     wait_service_absent(manager_guard.0)?;
-    remove_program_directory(&directory, &binary)
+    remove_program_directory(&directory)
 }
 fn valid_sid(sid: &str) -> bool {
     if !sid.starts_with("S-1-")
@@ -1537,6 +1565,58 @@ pub(super) fn run_service() -> Result<()> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn uninstall_program_cleanup_retries_after_real_file_delete_is_blocked() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let directory = fixture.path().join("FoldSentinel Protection");
+        assert!(!program_cleanup_required(&directory)?);
+        fs::create_dir(&directory)?;
+        let binary = directory.join("foldsentinel-service.exe");
+        fs::write(&binary, b"owned service fixture")?;
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&binary)?;
+        assert!(program_cleanup_required(&directory)?);
+        assert!(remove_program_directory(&directory).is_err());
+        assert_eq!(fs::read(&binary)?, b"owned service fixture");
+        assert!(program_cleanup_required(&directory)?);
+        drop(held);
+        remove_program_directory(&directory)?;
+        assert!(!program_cleanup_required(&directory)?);
+        remove_program_directory(&directory)?;
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_program_cleanup_accepts_empty_directory_after_partial_removal() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let directory = fixture.path().join("FoldSentinel Protection");
+        fs::create_dir(&directory)?;
+        assert!(program_cleanup_required(&directory)?);
+        // 已注册服务仍必须有程序；仅已注销后的清理允许空目录。
+        assert!(verify_program_directory(&directory).is_err());
+        remove_program_directory(&directory)?;
+        assert!(!program_cleanup_required(&directory)?);
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_program_cleanup_preserves_unknown_content_before_deleting_binary() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let directory = fixture.path().join("FoldSentinel Protection");
+        fs::create_dir(&directory)?;
+        let binary = directory.join("foldsentinel-service.exe");
+        let unknown = directory.join("unknown.txt");
+        fs::write(&binary, b"owned service fixture")?;
+        fs::write(&unknown, b"retain unknown content")?;
+        assert!(remove_program_directory(&directory).is_err());
+        assert_eq!(fs::read(&binary)?, b"owned service fixture");
+        assert_eq!(fs::read(&unknown)?, b"retain unknown content");
+        assert!(program_cleanup_required(&directory)?);
+        Ok(())
+    }
 
     #[test]
     fn forced_uninstall_accepts_error_exit_only_after_service_is_confirmed_stopped() {
