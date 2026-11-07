@@ -32,6 +32,8 @@ async function selectLanguage(page, language) {
 // 每个视图都读取浏览器实际样式。半透明背景由根到叶逐层合成，不用父元素单层颜色猜测。
 async function audit(page, name, width, scheme, language) {
   await page.keyboard.press('Tab');
+  // 主题文字立即切换，控件背景/边框有 160ms 过渡；等待动画结束后测量静态对比度。
+  await page.waitForFunction(() => document.getAnimations().every(animation => !animation.pending && animation.playState !== 'running'), null, { timeout: 5000, polling: 'raf' });
   const result = await page.evaluate(() => {
     const rgba = value => {
       const numbers = value.match(/[\d.]+/g)?.map(Number);
@@ -270,6 +272,8 @@ try {
         document.querySelector('#root-list').replaceChildren(...['consistent', 'changed', 'unavailable'].map((state, index) => createRootRecord({ id: `theme-root-${index}`, name: `${t('managedRoots')} ${index + 1}`, mode: 'locked', note: index ? t('notePlaceholder') : '', duplicate_name: index === 1 }, fail, fail, { verification: { state, checked_at: 1793095200000 }, verify: fail, saveNote: fail, noteDraft: index === 0 ? '' : undefined, feedback: { text: t(index === 2 ? 'error_service_unavailable' : 'verificationConsistent'), error: index === 2 }, busy: index === 2, aclRestoreConfirmation: index === 1 ? { confirm: fail, cancel: fail } : undefined })));
       });
       await audit(page, 'protection-synthetic-statuses', width, scheme, language);
+      await page.locator('#root-list [data-root-action="edit-note"]').nth(1).click();
+      await audit(page, 'protection-expanded-note-editor', width, scheme, language);
       // 用真实服务组件展示只读快照和加载属性；所有变更和文件选择都显式拒绝。
       await page.evaluate(async () => {
         const { ManagedProtectionUi } = await import('/ui/managed.ts');

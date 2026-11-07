@@ -426,6 +426,7 @@ fn metadata_entries(data_dir: &Path) -> Result<Vec<PathBuf>> {
         "vault-inventory.lock",
         "lifecycle.lock",
         "uninstall-session.json",
+        "window-preferences.json",
         "jobs",
     ]);
     ensure_plain(data_dir)?;
@@ -449,6 +450,9 @@ fn metadata_entries(data_dir: &Path) -> Result<Vec<PathBuf>> {
             );
         } else {
             ensure!(metadata.is_file(), "应用状态不是普通文件：{name}");
+            if name == "window-preferences.json" {
+                crate::desktop::validate_preferences_file(&path)?;
+            }
         }
     }
     Ok(entries.into_iter().map(|entry| entry.path()).collect())
@@ -568,6 +572,24 @@ mod tests {
         fs::create_dir(&data).unwrap();
         fs::create_dir(&inputs).unwrap();
         (root, data, inputs, cache)
+    }
+
+    #[test]
+    fn window_preferences_are_verified_before_metadata_cleanup() {
+        let (_root, data, _inputs, _cache) = fixture();
+        let preferences = data.join("window-preferences.json");
+        fs::write(
+            &preferences,
+            br#"{"close_to_tray":true,"start_minimized":false,"language":"zh-CN"}"#,
+        )
+        .unwrap();
+        assert_eq!(metadata_entries(&data).unwrap(), vec![preferences.clone()]);
+        clean_verified_metadata(&data).unwrap();
+        assert!(!preferences.exists());
+        fs::write(&preferences, br#"{"close_to_tray":true,"start_minimized":false,"language":"zh-CN","unknown":"preserve"}"#).unwrap();
+        assert!(metadata_entries(&data).is_err());
+        assert!(clean_verified_metadata(&data).is_err());
+        assert!(preferences.exists());
     }
 
     fn arm(data: &Path, forced: bool) -> Args {

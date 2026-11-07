@@ -25,7 +25,7 @@ struct DiagnosticReport<'a> {
     arch: &'static str,
     timestamp_ms: u128,
     paths_redacted: bool,
-    failure: &'a DiagnosticRequest,
+    failure: Option<&'a DiagnosticRequest>,
 }
 
 pub fn diagnostic_report(request: &DiagnosticRequest) -> Result<String> {
@@ -37,6 +37,10 @@ pub fn diagnostic_report(request: &DiagnosticRequest) -> Result<String> {
                 .all(|code| (0..=65535).contains(code)),
         ErrorCode::InvalidInput
     );
+    report(Some(request))
+}
+
+fn report(failure: Option<&DiagnosticRequest>) -> Result<String> {
     Ok(serde_json::to_string_pretty(&DiagnosticReport {
         schema: 1,
         app_version: env!("CARGO_PKG_VERSION"),
@@ -44,12 +48,20 @@ pub fn diagnostic_report(request: &DiagnosticRequest) -> Result<String> {
         arch: std::env::consts::ARCH,
         timestamp_ms: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
         paths_redacted: true,
-        failure: request,
+        failure,
     })?)
 }
 
 pub fn export_diagnostic(path: &Path, request: &DiagnosticRequest) -> Result<()> {
     let report = diagnostic_report(request)?;
+    export_report(path, &report)
+}
+
+pub fn export_system_diagnostic(path: &Path) -> Result<()> {
+    export_report(path, &report(None)?)
+}
+
+fn export_report(path: &Path, report: &str) -> Result<()> {
     ensure!(
         path.is_absolute()
             && path
@@ -167,5 +179,19 @@ mod tests {
             std::fs::canonicalize(dir.path()).unwrap()
         );
         assert!(output_folder(&dir.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn system_diagnostic_has_no_fabricated_failure_and_preserves_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("system.json");
+        export_system_diagnostic(&path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        assert_eq!(report["failure"], serde_json::Value::Null);
+        assert_eq!(report["paths_redacted"], true);
+        assert_eq!(report["app_version"], env!("CARGO_PKG_VERSION"));
+        assert!(export_system_diagnostic(&path).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
     }
 }

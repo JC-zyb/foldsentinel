@@ -1,4 +1,4 @@
-use super::{ErrorCode, legacy};
+use super::{ErrorCode, paths};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,7 +41,7 @@ pub fn prepare(
     let mut used: HashSet<String> = reserved.iter().map(|p| key(p)).collect();
     let mut tasks = Vec::new();
     for input in inputs {
-        legacy::reject_link(input)?;
+        paths::reject_link(input)?;
         let input = fs::canonicalize(input)?;
         ensure!(
             input.is_file() || (operation == Operation::Encrypt && input.is_dir()),
@@ -91,7 +91,7 @@ pub fn prepare(
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.into()),
                 }
-                let path = legacy::output_path(&path)?;
+                let path = paths::output_path(&path)?;
                 if operation == Operation::Encrypt {
                     ensure!(
                         !PathBuf::from(key(&path)).starts_with(PathBuf::from(key(&input))),

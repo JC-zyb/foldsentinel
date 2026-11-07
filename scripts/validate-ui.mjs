@@ -129,15 +129,19 @@ try {
           // 故意附加旧字段，确保真实渲染组件也不把它们写进文本、title、aria 或表单。
           const record = { id: 'synthetic-root', name: '中文最外层名称'.repeat(18), mode: 'hidden-locked', note: '工作资料', duplicate_name: true, path: 'D:\\private-parent\\private-child.txt', entry_count: 54 };
           window.selectedProtectionMode = null;
+          window.protectionModeEvents = [];
           window.savedProtectionNote = null;
           roots.replaceChildren(
-            createRootRecord(record, () => {}, mode => { window.selectedProtectionMode = mode; }, {
+            createRootRecord(record, () => {}, mode => { window.selectedProtectionMode = mode; window.protectionModeEvents.push(['apply', record.id, mode]); }, {
               verify: () => {}, saveNote: note => { window.savedProtectionNote = note; },
+              onPendingMode: mode => { window.protectionModeEvents.push(['pending', record.id, mode]); },
               feedback: { text: '布局反馈 / Layout feedback' },
               verification: { state: 'consistent', checked_at: 1793095200000 }
             }),
             createRootRecord({ id: 'second-id', name: '<img src=x onerror=alert(1)>.txt', mode: 'hidden-readonly' }, () => {}, () => {}),
-            createRootRecord({ id: 'mixed-id', name: '混合方式', mode: null }, () => {}, mode => { window.selectedProtectionMode = mode; })
+            createRootRecord({ id: 'mixed-id', name: '混合方式', mode: null }, () => {}, mode => { window.selectedProtectionMode = mode; window.protectionModeEvents.push(['apply', 'mixed-id', mode]); }, {
+              onPendingMode: mode => { window.protectionModeEvents.push(['pending', 'mixed-id', mode]); }
+            })
           );
           syncRootControls(roots, false, false);
         });
@@ -147,14 +151,18 @@ try {
         await first.locator('[data-root-action="expand-name"]').click();
         assert.equal(await first.locator('[data-root-action="expand-name"]').getAttribute('aria-expanded'), 'true');
         await first.locator('[data-root-action="expand-name"]').click();
-        assert.equal(await mixed.locator('[data-root-action="apply"]').isDisabled(), true, '混合方式必须先选择具体模式');
+        assert.equal(await page.locator('#root-list .root-policy select:visible').count(), 3, '登记方式直接显示在每行');
+        assert.equal(await page.locator('#root-list .root-editor, #root-list [data-root-action="edit-protection"], #root-list [data-root-action="apply"]').count(), 0, '只保留一个登记方式入口');
+        assert.equal(await mixed.locator('select').inputValue(), '', '混合方式尚未选择具体模式');
+        assert.equal(await mixed.locator('select option[value=""]').isDisabled(), true);
+        assert.deepEqual(await page.evaluate(() => window.protectionModeEvents), [], '初始渲染不会提交方式');
         await mixed.locator('select').selectOption('hidden');
-        assert.equal(await mixed.locator('.root-mode-pending').isVisible(), true, '修改后显示未应用');
-        assert.equal(await mixed.locator('[data-root-action="apply"]').isEnabled(), true);
+        assert.deepEqual(await page.evaluate(() => window.protectionModeEvents), [['pending', 'mixed-id', 'hidden'], ['apply', 'mixed-id', 'hidden']], '单次 change 先保存选择，再直接调用一次应用回调');
+        await first.locator('select').focus();
         await first.locator('select').selectOption('locked');
-        await first.locator('[data-root-action="apply"]').click();
         assert.equal(await page.evaluate(() => window.selectedProtectionMode), 'locked');
-        assert.equal(await first.locator('[data-root-action="apply"]').evaluate(button => document.activeElement === button), true, '行操作回调不应抢焦点');
+        assert.deepEqual(await page.evaluate(() => window.protectionModeEvents.slice(2)), [['pending', 'synthetic-root', 'locked'], ['apply', 'synthetic-root', 'locked']]);
+        assert.equal(await first.locator('select').evaluate(select => document.activeElement === select), true, '方式回调不应抢焦点');
         await first.locator('[data-root-action="edit-note"]').click();
         const note = first.locator('.root-note-editor input');
         await note.fill('a'.repeat(81));
@@ -174,7 +182,11 @@ try {
           document.querySelector('#root-list').append(row);
           const input = row.querySelector('.root-note-editor input');
           if (row.querySelector('.root-note-editor').hidden || input.value !== draft) throw new Error('重建记录时必须恢复未保存备注');
-          syncRootControls(row, true, false); syncRootControls(row, false, true); syncRootControls(row, false, false);
+          for (const [busy, stale] of [[true, false], [false, true]]) {
+            syncRootControls(row, busy, stale);
+            if (!row.querySelector('select').disabled) throw new Error('忙碌或刷新失败时不可更改登记方式');
+          }
+          syncRootControls(row, false, false);
           if (input.value !== draft) throw new Error('忙碌或刷新失败不能清空备注草稿');
           row.querySelector('[data-root-action="cancel-note"]').click();
           if (draft !== undefined) throw new Error('取消编辑必须清除备注草稿');
@@ -185,6 +197,7 @@ try {
           syncRootControls(document.querySelector('#root-list'), false, true);
         });
         assert.equal(await first.locator('[data-root-action="restore"]').isDisabled(), true, '过期视图不可操作恢复');
+        assert.equal(await first.locator('select').isDisabled(), true, '过期视图不可更改登记方式');
         assert.equal(await first.locator('[data-root-action="expand-name"]').isEnabled(), true, '过期视图仍可展开名称');
         await page.evaluate(async () => {
           const { syncRootControls } = await import('/ui/attributes.ts');
@@ -210,6 +223,7 @@ try {
         });
         assert.equal(await page.locator('#root-list [data-root-action=review-acl-restore]').count(), 0, '恢复冲突不应再增加独立操作按钮');
         assert.equal(await page.locator('#root-list [data-root-action=restore]').count(), 5, '每条保护项目继续只有原有解除入口');
+        assert.equal(await page.locator('#root-list .root-mode-value').count(), 2, '无方式修改回调的只读记录继续显示静态登记方式');
         await page.locator('#root-list [data-root-action=restore]').nth(3).click();
         await page.locator('[data-root-action=cancel-acl-restore]').click();
         await page.locator('[data-root-action=confirm-acl-restore]').click();
@@ -244,7 +258,7 @@ try {
         assert.deepEqual(clippedModes, [], `登记方式选中值必须完整可读：${JSON.stringify({ width, language, clippedModes })}`);
         const screenshot = `ui-${width}-${scale}-attributes-${language}.png`;
         await page.screenshot({ path: join(screenshotRoot, screenshot), fullPage: true });
-        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_explicit: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, one_restore_entry_point_with_confirmation_on_conflict: true, screenshot });
+        checks.push({ css_width: width, device_scale_factor: scale, operation: 'attributes', language, no_horizontal_overflow: true, synthetic_root_layout: true, only_outer_names_in_dom_and_accessibility: true, names_rendered_as_text: true, add_entry_above_fold: true, add_cancel_clears_path: true, name_expansion: true, mixed_mode_requires_selection: true, mode_changes_directly_once: true, selection_saved_before_callback: true, static_mode_without_callback: true, note_unicode_limit: true, note_draft_preserved: true, stale_records_disable_actions: true, row_action_keeps_focus: true, one_restore_entry_point_with_confirmation_on_conflict: true, screenshot });
       }
       await page.locator('#nav-settings').click();
       await page.locator('#language').focus();

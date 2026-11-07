@@ -31,10 +31,12 @@ async function setup(context) {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url.href, { waitUntil: 'domcontentloaded' });
   await page.locator('#nav-attributes').click();
+  await page.locator('#protection-service-tab').click();
   await page.evaluate(async () => {
     const { ManagedProtectionUi } = await import('/ui/managed.ts');
     const previous = document.querySelector('#managed-service-panel');
     const container = document.createElement('section'); container.id = 'managed-service-panel';
+    container.setAttribute('role', 'tabpanel'); container.setAttribute('aria-labelledby', 'protection-service-tab');
     previous.replaceWith(container);
     const fixture = { state: 'absent', success: false, desktop: true, blocked: false, probeFailure: false,
       holdProbe: false, holdStatus: false, probeCalls: 0, calls: 0, installCalls: 0,

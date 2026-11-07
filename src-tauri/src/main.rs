@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use tauri::{Manager, State, ipc::Channel};
 use zeroize::Zeroizing;
 mod attributes;
+mod desktop;
 mod service_setup;
 mod settings;
 mod support;
@@ -161,8 +162,13 @@ async fn recovery_entries() -> Result<Vec<vault::recovery::RecoveryEntry>, UiErr
 }
 
 #[tauri::command]
-async fn cleanup_job(id: String) -> Result<vault::recovery::InterruptedJob, UiError> {
+async fn cleanup_job(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<vault::recovery::InterruptedJob, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let root = vault::recovery::default_recovery_dir().map_err(UiError::vault)?;
         vault::recovery::cleanup_interrupted(&root, &id)
             .map_err(|e| UiError::vault(e.context(vault::ErrorCode::Recovery)))
@@ -182,18 +188,26 @@ fn export_diagnostic(path: PathBuf, request: support::DiagnosticRequest) -> Resu
 }
 
 #[tauri::command]
+fn export_system_diagnostic(path: PathBuf) -> Result<(), UiError> {
+    support::export_system_diagnostic(&path).map_err(UiError::vault)
+}
+
+#[tauri::command]
 fn open_output_folder(path: PathBuf) -> Result<(), UiError> {
     support::open_output_folder(&path).map_err(UiError::vault)
 }
 
 #[tauri::command]
 async fn attribute_operation(
+    app: tauri::AppHandle,
     path: String,
     mode: ProtectionMode,
     restore: bool,
     note: Option<String>,
 ) -> Result<OperationReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         let result = if restore {
             store.unprotect(&PathBuf::from(path))
@@ -219,8 +233,13 @@ async fn preview_protection_add(
 }
 
 #[tauri::command]
-async fn export_protection_backup(path: PathBuf) -> Result<foldsentinel::BackupReport, UiError> {
+async fn export_protection_backup(
+    app: tauri::AppHandle,
+    path: PathBuf,
+) -> Result<foldsentinel::BackupReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let store = StateStore::load_default().map_err(UiError::vault)?;
         store.export_backup(&path).map_err(UiError::vault)
     })
@@ -229,8 +248,13 @@ async fn export_protection_backup(path: PathBuf) -> Result<foldsentinel::BackupR
 }
 
 #[tauri::command]
-async fn import_protection_backup(path: PathBuf) -> Result<foldsentinel::BackupReport, UiError> {
+async fn import_protection_backup(
+    app: tauri::AppHandle,
+    path: PathBuf,
+) -> Result<foldsentinel::BackupReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         store.import_backup(&path).map_err(UiError::vault)
     })
@@ -266,8 +290,14 @@ async fn verify_protection(id: String) -> Result<attributes::Verification, UiErr
 }
 
 #[tauri::command]
-async fn set_protection_note(id: String, note: String) -> Result<(), UiError> {
+async fn set_protection_note(
+    app: tauri::AppHandle,
+    id: String,
+    note: String,
+) -> Result<(), UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         attributes::set_note(&mut store, &id, &note).map_err(UiError::vault)
     })
@@ -276,8 +306,10 @@ async fn set_protection_note(id: String, note: String) -> Result<(), UiError> {
 }
 
 #[tauri::command]
-async fn restore_attributes(id: String) -> Result<OperationReport, UiError> {
+async fn restore_attributes(app: tauri::AppHandle, id: String) -> Result<OperationReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         attributes::restore(&mut store, &id).map_err(UiError::vault)
     })
@@ -286,8 +318,14 @@ async fn restore_attributes(id: String) -> Result<OperationReport, UiError> {
 }
 
 #[tauri::command]
-async fn set_protection_mode(id: String, mode: ProtectionMode) -> Result<OperationReport, UiError> {
+async fn set_protection_mode(
+    app: tauri::AppHandle,
+    id: String,
+    mode: ProtectionMode,
+) -> Result<OperationReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         attributes::apply(&mut store, &id, mode).map_err(UiError::vault)
     })
@@ -307,10 +345,13 @@ async fn review_restore_attributes(id: String) -> Result<attributes::AclRestoreR
 
 #[tauri::command]
 async fn restore_attributes_after_review(
+    app: tauri::AppHandle,
     id: String,
     token: String,
 ) -> Result<OperationReport, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let mut store = StateStore::load_default().map_err(UiError::vault)?;
         attributes::restore_after_review(&mut store, &id, &token).map_err(UiError::vault)
     })
@@ -320,9 +361,12 @@ async fn restore_attributes_after_review(
 
 #[tauri::command]
 async fn managed_protection(
+    app: tauri::AppHandle,
     command: foldsentinel::service::Command,
 ) -> Result<foldsentinel::service::Response, UiError> {
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         let registration_guard =
             if let foldsentinel::service::Command::Enroll { path, .. } = &command {
                 let store = StateStore::load_default().map_err(UiError::vault)?;
@@ -350,9 +394,11 @@ async fn managed_protection(
 }
 
 #[tauri::command]
-async fn service_install() -> Result<service_setup::InstallReport, UiError> {
+async fn service_install(app: tauri::AppHandle) -> Result<service_setup::InstallReport, UiError> {
     let guard = service_setup::acquire_install().map_err(UiError::vault)?;
+    let operation = desktop::operation(&app);
     tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
         service_setup::install_from_ui(guard).map_err(UiError::vault)
     })
     .await
@@ -401,6 +447,46 @@ async fn open_release_page(url: String) -> Result<(), updates::UpdateError> {
         .map_err(|_| updates::UpdateError::Unavailable)?
 }
 
+#[tauri::command]
+fn get_window_preferences(app: tauri::AppHandle) -> Result<desktop::WindowPreferences, UiError> {
+    desktop::get_preferences(&app).map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn take_desktop_action_error(
+    app: tauri::AppHandle,
+) -> Result<Option<desktop::DesktopActionError>, UiError> {
+    desktop::take_action_error(&app).map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn set_window_preferences(
+    app: tauri::AppHandle,
+    preferences: desktop::WindowPreferences,
+) -> Result<desktop::WindowPreferences, UiError> {
+    desktop::set_preferences(&app, preferences).map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn set_desktop_busy(app: tauri::AppHandle, busy: bool) {
+    desktop::set_busy(&app, busy);
+}
+
+#[tauri::command]
+fn data_locations(app: tauri::AppHandle) -> Result<desktop::DataLocations, UiError> {
+    desktop::data_locations(&app).map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn open_data_location(app: tauri::AppHandle, kind: desktop::DataLocation) -> Result<(), UiError> {
+    desktop::open_data_location(&app, kind).map_err(UiError::internal)
+}
+
+#[tauri::command]
+fn notify_task(app: tauri::AppHandle, failed: bool, language: String) -> Result<(), UiError> {
+    desktop::notify_task(&app, failed, &language).map_err(UiError::internal)
+}
+
 fn main() {
     if let Some(code) = service_setup::maybe_run() {
         std::process::exit(code);
@@ -410,9 +496,20 @@ fn main() {
     }
     tauri::Builder::default()
         .manage(ActiveJob::default())
+        .setup(|app| desktop::setup(app).map_err(Into::into))
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if desktop::close_to_tray(window.app_handle()) {
+                    api.prevent_close();
+                    if let Err(error) = desktop::hide(window) {
+                        eprintln!("隐藏到托盘失败: {error:#}");
+                    }
+                    return;
+                }
+                if desktop::busy(window.app_handle()) {
+                    api.prevent_close();
+                }
                 let state = window.state::<ActiveJob>();
                 if let Some(control) = state.0.lock().expect("active job mutex poisoned").as_ref() {
                     api.prevent_close();
@@ -428,6 +525,7 @@ fn main() {
             cleanup_job,
             diagnostic_report,
             export_diagnostic,
+            export_system_diagnostic,
             open_output_folder,
             attribute_operation,
             managed_protection,
@@ -445,9 +543,26 @@ fn main() {
             restore_attributes_after_review,
             autostart_enabled,
             set_autostart_enabled,
+            get_window_preferences,
+            take_desktop_action_error,
+            set_window_preferences,
+            set_desktop_busy,
+            data_locations,
+            open_data_location,
+            notify_task,
             check_for_updates,
             open_release_page
         ])
-        .run(tauri::generate_context!())
-        .expect("FoldSentinel 桌面程序启动失败");
+        .build(tauri::generate_context!())
+        .expect("FoldSentinel 桌面程序启动失败")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event
+                && desktop::busy(app)
+            {
+                api.prevent_exit();
+                if let Err(error) = tauri::Emitter::emit(app, "exit-blocked", ()) {
+                    eprintln!("发送退出阻止事件失败: {error}");
+                }
+            }
+        });
 }

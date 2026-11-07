@@ -429,6 +429,95 @@ fn tampering_reordering_truncation_and_append_never_commit() {
 }
 
 #[test]
+fn invalid_content_declarations_are_rejected_by_all_read_operations() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let sealed = dir.path().join("sealed");
+    let output = dir.path().join("restored");
+    fs::write(&source, b"keep source").unwrap();
+    encrypt_with_control(&source, &sealed, "test", &control(dir.path())).unwrap();
+    let original = fs::read(&sealed).unwrap();
+    let mut oversized_content = original.clone();
+    oversized_content[34..42].copy_from_slice(&(MAX_CONTENT + 1).to_le_bytes());
+    let mut file_with_entries = original.clone();
+    file_with_entries[42..46].copy_from_slice(&1u32.to_le_bytes());
+    let mut oversized_directory = original;
+    oversized_directory[9] = 1;
+    oversized_directory[42..46].copy_from_slice(&((MAX_ENTRIES + 1) as u32).to_le_bytes());
+
+    for bytes in [oversized_content, file_with_entries, oversized_directory] {
+        fs::write(&sealed, bytes).unwrap();
+        let verified = verify_with_control(&sealed, "test", &control(dir.path())).unwrap_err();
+        let inspected = inspect_with_control(&sealed, "test", &control(dir.path())).unwrap_err();
+        let restored =
+            decrypt_with_control(&sealed, &output, "test", &control(dir.path())).unwrap_err();
+        for error in [verified, inspected, restored] {
+            assert_eq!(error_code(&error), ErrorCode::InvalidPackage);
+        }
+        assert!(!output.exists());
+        assert!(
+            fs::read_dir(dir.path().join("jobs"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+    assert_eq!(fs::read(&source).unwrap(), b"keep source");
+}
+
+#[cfg(windows)]
+#[test]
+fn read_operations_hold_package_against_mutation_until_commit() {
+    for old_format in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = dir.path().join("sealed");
+        let password = if old_format {
+            fs::write(&sealed, include_bytes!("../../tests/fixtures/v1-file.fse")).unwrap();
+            "compatibility-test-only"
+        } else {
+            let source = dir.path().join("source");
+            fs::write(&source, b"keep package stable").unwrap();
+            encrypt_with_control(&source, &sealed, "test", &control(dir.path())).unwrap();
+            "test"
+        };
+        let original = fs::read(&sealed).unwrap();
+        for operation in ["verify", "inspect", "restore"] {
+            let attempts = Arc::new(Mutex::new(0));
+            let captured_attempts = attempts.clone();
+            let captured_package = sealed.clone();
+            let control = Control::with_recovery_dir(dir.path().join("jobs"), move |progress| {
+                if progress.phase == "committing" {
+                    assert!(
+                        OpenOptions::new()
+                            .write(true)
+                            .open(&captured_package)
+                            .is_err()
+                    );
+                    assert!(fs::remove_file(&captured_package).is_err());
+                    *captured_attempts.lock().unwrap() += 1;
+                }
+            });
+            match operation {
+                "verify" => {
+                    verify_with_control(&sealed, password, &control).unwrap();
+                }
+                "inspect" => {
+                    inspect_with_control(&sealed, password, &control).unwrap();
+                }
+                "restore" => {
+                    decrypt_with_control(&sealed, &dir.path().join("restored"), password, &control)
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(*attempts.lock().unwrap(), 1);
+            assert_eq!(fs::read(&sealed).unwrap(), original);
+            assert!(OpenOptions::new().write(true).open(&sealed).is_ok());
+        }
+    }
+}
+
+#[test]
 fn cancellation_before_commit_cleans_payload_and_journal() {
     for phase in ["deriving", "encrypting", "verifying", "syncing"] {
         let dir = tempfile::tempdir().unwrap();
@@ -748,8 +837,16 @@ fn directory_end_requires_authenticated_final_frame() {
     bytes.truncate(HEADER_LEN + 4 + stream::CHUNK + 16);
     fs::write(&sealed, bytes).unwrap();
     let output = dir.path().join("restored");
+    assert!(verify_with_control(&sealed, "test", &control(dir.path())).is_err());
+    assert!(inspect_with_control(&sealed, "test", &control(dir.path())).is_err());
     assert!(decrypt_with_control(&sealed, &output, "test", &control(dir.path())).is_err());
     assert!(!output.exists());
+    assert!(
+        fs::read_dir(dir.path().join("jobs"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

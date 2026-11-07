@@ -1,6 +1,6 @@
 [package]
 name = "foldsentinel"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 description = "Open-source Windows folder protection and encrypted vault tooling."
 license = "MIT"

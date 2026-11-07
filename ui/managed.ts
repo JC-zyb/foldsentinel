@@ -10,6 +10,7 @@ interface ManagedOptions {
   isDesktop: () => boolean;
   isBlocked: () => boolean;
   choose: (directory: boolean) => Promise<string | null>;
+  defaultUnlockMinutes?: () => number;
 }
 type EditorKind = 'enroll' | 'unlock' | 'password' | 'remove' | 'continuous';
 interface Feedback { key?: MessageKey; code?: string; values?: Record<string, string | number>; error?: boolean }
@@ -228,42 +229,47 @@ export class ManagedProtectionUi {
     const helpOpen = this.container.querySelector<HTMLDetailsElement>('.managed-service-help')?.open ?? false;
     this.container.replaceChildren();
     this.container.className = 'records managed-protection';
+    const overview = document.createElement('section'); overview.className = 'managed-service-overview'; overview.setAttribute('aria-labelledby', 'managed-title');
     const header = document.createElement('div'); header.className = 'records-heading';
-    const heading = document.createElement('h2'); heading.id = 'managed-title'; heading.tabIndex = -1; heading.textContent = t('managedTitle');
-    const refresh = this.button('refreshServiceStatus', () => { void this.refresh(); }); refresh.id = 'managed-refresh'; refresh.dataset.focusAction = 'refresh'; header.append(heading, refresh); this.container.append(header);
+    const heading = document.createElement('h2'); heading.id = 'managed-title'; heading.tabIndex = -1; heading.textContent = t('managedServiceStatusTitle');
+    const refresh = this.button('refreshServiceStatus', () => { void this.refresh(); }); refresh.id = 'managed-refresh'; refresh.className = 'text-button'; refresh.dataset.focusAction = 'refresh'; header.append(heading, refresh); overview.append(header); this.container.append(overview);
     const status = this.paragraph(this.statusText(), 'managed-service-status');
-    status.id = 'managed-service-status'; status.setAttribute('role', 'status'); this.container.append(status);
+    status.id = 'managed-service-status'; status.setAttribute('role', 'status'); overview.append(status);
     if (this.installation === 'absent' || this.installing) {
       const setup = document.createElement('div'); setup.className = 'managed-service-install';
       const install = this.button('managedInstallService', () => { void this.installService(); }, true);
       install.id = 'managed-install'; install.dataset.focusAction = 'install'; install.setAttribute('aria-describedby', 'managed-install-help');
       const help = this.paragraph(t('managedServiceInstallPrompt')); help.id = 'managed-install-help';
-      setup.append(install, help); this.container.append(setup);
+      setup.append(install, help); overview.append(setup);
     }
-    if (this.transport?.last_tick_error) this.container.append(this.paragraph(errorText(this.transport.last_tick_error), 'managed-service-error'));
+    if (this.transport?.last_tick_error) overview.append(this.paragraph(errorText(this.transport.last_tick_error), 'managed-service-error'));
     const details = document.createElement('details'); details.className = 'managed-service-help'; details.open = helpOpen;
-    const summary = document.createElement('summary'); summary.dataset.focusAction = 'service-help'; summary.textContent = t('managedServiceDetails'); details.append(summary, this.paragraph(t('managedServiceInstallHelp')), this.paragraph(t('managedServiceScope')), this.paragraph(t('managedServicePasswordBoundary'))); this.container.append(details);
+    const summary = document.createElement('summary'); summary.dataset.focusAction = 'service-help'; summary.textContent = t('managedServiceDetails'); details.append(summary, this.paragraph(t('managedServiceInstallHelp')), this.paragraph(t('managedServiceScope')), this.paragraph(t('managedServicePasswordBoundary'))); overview.append(details);
     if (this.feedback) { const feedback = this.paragraph(this.feedbackText(this.feedback), `protection-feedback${this.feedback.error ? ' error' : ''}`); feedback.id = 'managed-feedback'; feedback.setAttribute('role', this.feedback.error ? 'alert' : 'status'); this.container.append(feedback); }
-    if (this.installFeedback) { const feedback = this.paragraph(this.feedbackText(this.installFeedback), `protection-feedback${this.installFeedback.error ? ' error' : ''}`); feedback.id = 'managed-install-feedback'; feedback.setAttribute('role', this.installFeedback.error ? 'alert' : 'status'); this.container.append(feedback); }
-    const tools = document.createElement('div'); tools.className = 'managed-tools';
+    if (this.installFeedback) { const feedback = this.paragraph(this.feedbackText(this.installFeedback), `protection-feedback${this.installFeedback.error ? ' error' : ''}`); feedback.id = 'managed-install-feedback'; feedback.setAttribute('role', this.installFeedback.error ? 'alert' : 'status'); overview.append(feedback); }
+    const tools = document.createElement('div'); tools.className = 'managed-tools'; tools.hidden = this.editor?.kind === 'enroll';
     const add = this.button('managedAdd', () => this.open('enroll'), true); add.id = 'managed-add'; add.dataset.managedAction = 'enroll'; tools.append(add);
+    this.container.append(tools);
+    if (this.editor) this.renderEditor();
+    const records = document.createElement('section'); records.className = 'managed-records'; records.setAttribute('aria-labelledby', 'managed-records-title');
+    const recordsHeader = document.createElement('div'); recordsHeader.className = 'records-heading';
+    const recordsTitle = document.createElement('h2'); recordsTitle.id = 'managed-records-title'; recordsTitle.textContent = t('managedRegisteredItems'); recordsHeader.append(recordsTitle);
     const search = document.createElement('form'); search.className = 'protection-search'; search.setAttribute('role', 'search');
     const label = document.createElement('label'); label.className = 'sr-only'; label.htmlFor = 'managed-search'; label.textContent = t('searchManaged');
     const input = document.createElement('input'); input.id = 'managed-search'; input.type = 'search'; input.maxLength = 160; input.value = this.query; input.placeholder = t('searchManaged');
     const find = this.button('search', () => {}); find.type = 'submit'; search.append(label, input, find);
     search.onsubmit = event => { event.preventDefault(); this.clearPasswords(); this.editor = null; this.query = input.value.trim(); this.offset = 0; this.render(); this.element('managed-search').focus({ preventScroll: true }); };
-    tools.append(search); this.container.append(tools);
-    if (this.editor) this.renderEditor();
+    recordsHeader.append(search); records.append(recordsHeader);
     const roots = this.filtered(); const list = document.createElement('ul'); list.id = 'managed-root-list';
     if (!roots.length) list.append(this.paragraph(t(!this.snapshot && !this.available ? 'managedListUnavailable' : this.snapshot?.registered ? 'noProtectionMatches' : 'managedEmpty'), 'empty-records'));
     for (const root of roots.slice(this.offset, this.offset + 50)) list.append(this.renderRoot(root));
-    this.container.append(list);
+    records.append(list); this.container.append(records);
     if (roots.length) {
       const footer = document.createElement('div'); footer.className = 'managed-pagination';
       footer.append(this.paragraph(t('rootSummary', { total: roots.length, from: this.offset + 1, to: Math.min(roots.length, this.offset + 50) })));
       const previous = this.button('previousPage', () => { this.clearPasswords(); this.editor = null; this.offset = Math.max(0, this.offset - 50); this.render(); }); previous.id = 'managed-previous';
       const next = this.button('nextPage', () => { this.clearPasswords(); this.editor = null; this.offset += 50; this.render(); }); next.id = 'managed-next';
-      if (roots.length > 50) footer.append(previous, next); this.container.append(footer);
+      if (roots.length > 50) footer.append(previous, next); records.append(footer);
     }
     this.sync(); this.restoreFocus(focus);
   }
@@ -300,19 +306,25 @@ export class ManagedProtectionUi {
     const titles = { enroll: 'managedAdd', unlock: 'managedUnlock', password: 'managedPasswordSettings', remove: 'confirmSelectedRestore', continuous: root?.monitoring ? 'managedStopMonitoring' : 'managedStartMonitoring' } as const;
     legend.textContent = t(titles[editor.kind]); legend.tabIndex = -1; fieldset.append(legend);
     if (root) { const name = document.createElement('strong'); name.textContent = `${root.name}${root.note ? ` · ${root.note}` : ''}`; fieldset.append(name); }
-    const field = (key: MessageKey, id: string, type = 'text', required = false): HTMLInputElement => {
-      const label = document.createElement('label'); label.htmlFor = id; label.textContent = t(key); const input = document.createElement('input'); input.id = id; input.type = type; input.required = required; input.autocomplete = type === 'password' ? 'off' : 'off';
+    const field = (key: MessageKey, id: string, type = 'text', required = false, parent: HTMLElement = fieldset): HTMLInputElement => {
+      const label = document.createElement('label'); label.className = 'managed-field'; label.htmlFor = id; label.textContent = t(key); const input = document.createElement('input'); input.id = id; input.type = type; input.required = required; input.autocomplete = 'off';
       if (type === 'password') { input.maxLength = 1024; input.spellcheck = false; input.setAttribute('autocapitalize', 'off'); }
-      label.append(input); fieldset.append(label); return input;
+      label.append(input); parent.append(label); return input;
     };
     let path: HTMLInputElement | null = null; let note: HTMLInputElement | null = null; let mode: HTMLSelectElement | null = null;
     let password: HTMLInputElement | null = null; let newPassword: HTMLInputElement | null = null; let confirmation: HTMLInputElement | null = null; let setPassword: HTMLInputElement | null = null; let removePassword: HTMLInputElement | null = null;
     let duration: HTMLSelectElement | null = null;
     if (editor.kind === 'enroll') {
-      fieldset.append(this.paragraph(t('managedEnrollHelp')));
-      path = field('attributePath', 'managed-path', 'text', true); path.spellcheck = false;
+      form.classList.add('managed-enrollment');
+      const columns = document.createElement('div'); columns.className = 'managed-editor-grid';
+      const project = document.createElement('div'); project.className = 'managed-project-fields';
+      const access = document.createElement('div'); access.className = 'managed-access-fields';
+      const projectHeading = document.createElement('h3'); projectHeading.textContent = t('managedProjectDetails');
+      const accessHeading = document.createElement('h3'); accessHeading.textContent = t('managedAccessSettings');
+      project.append(projectHeading); access.append(accessHeading); columns.append(project, access); fieldset.append(columns);
+      path = field('attributePath', 'managed-path', 'text', true, project); path.spellcheck = false;
       const selected = this.paragraph('', 'managed-selected-name'); selected.id = 'managed-selected-name'; path.oninput = () => { this.clearPasswords(); selected.textContent = nameOnly(path!.value); };
-      fieldset.append(selected);
+      project.append(selected);
       const picks = document.createElement('div'); picks.className = 'selection-actions';
       for (const folder of [false, true]) picks.append(this.button(folder ? 'addProtectionFolders' : 'addProtectionFiles', () => {
         this.clearPasswords(); void this.options.run(async () => {
@@ -320,24 +332,26 @@ export class ManagedProtectionUi {
           catch { this.feedback = { key: 'dialogFailed', error: true }; this.clearPasswords(); this.render(); }
         });
       }));
-      fieldset.append(picks); note = field('protectionNote', 'managed-note'); note.maxLength = 160; note.placeholder = t('notePlaceholder'); note.oninput = () => { this.clearPasswords(); note!.setCustomValidity(validProtectionNote(note!.value) ? '' : t('notePlaceholder')); };
-      const label = document.createElement('label'); label.textContent = t('policy'); mode = document.createElement('select'); mode.id = 'managed-mode';
+      project.append(picks); note = field('protectionNote', 'managed-note', 'text', false, project); note.maxLength = 160; note.placeholder = t('notePlaceholder'); note.oninput = () => { this.clearPasswords(); note!.setCustomValidity(validProtectionNote(note!.value) ? '' : t('notePlaceholder')); };
+      project.append(this.paragraph(t('managedEnrollHelp')));
+      const label = document.createElement('label'); label.className = 'managed-field'; label.htmlFor = 'managed-mode'; label.textContent = t('policy'); mode = document.createElement('select'); mode.id = 'managed-mode';
       for (const value of ['hidden-locked', 'locked', 'readonly-acl'] as const) { const option = document.createElement('option'); option.value = value; option.textContent = t(modeKeys[value]); mode.append(option); }
-      mode.onchange = () => this.clearPasswords(); label.append(mode); fieldset.append(label);
+      mode.onchange = () => this.clearPasswords(); label.append(mode); access.append(label);
       const checkbox = document.createElement('label'); checkbox.className = 'checkbox'; setPassword = document.createElement('input'); setPassword.id = 'managed-use-password'; setPassword.type = 'checkbox'; setPassword.checked = true;
-      const caption = document.createElement('span'); caption.textContent = t('managedRequirePassword'); checkbox.append(setPassword, caption); fieldset.append(checkbox);
-      newPassword = field('managedNewPassword', 'managed-new-password', 'password', true); confirmation = field('confirmPassword', 'managed-confirm-password', 'password', true);
+      const caption = document.createElement('span'); caption.textContent = t('managedRequirePassword'); checkbox.append(setPassword, caption); access.append(checkbox);
+      const passwords = document.createElement('div'); passwords.className = 'managed-password-fields'; access.append(passwords);
+      newPassword = field('managedNewPassword', 'managed-new-password', 'password', true, passwords); confirmation = field('confirmPassword', 'managed-confirm-password', 'password', true, passwords);
       setPassword.onchange = () => { this.clearPasswords(); newPassword!.required = confirmation!.required = setPassword!.checked; newPassword!.disabled = confirmation!.disabled = !setPassword!.checked; };
-      fieldset.append(this.paragraph(t('managedPasswordRules')));
+      access.append(this.paragraph(t('managedPasswordRules')));
     } else {
       if (editor.kind === 'unlock') fieldset.append(this.paragraph(t('managedUnlockHelp')));
       if (editor.kind === 'remove') fieldset.append(this.paragraph(t('managedRemoveHelp'), 'notice'));
       if (editor.kind === 'continuous') fieldset.append(this.paragraph(t(root?.monitoring ? 'managedStopHelp' : 'managedStartHelp'), 'notice'));
       if (root?.password_required || editor.kind === 'password') password = field('managedCurrentPassword', 'managed-current-password', 'password', !!root?.password_required);
       if (editor.kind === 'unlock') {
-        const label = document.createElement('label'); label.textContent = t('managedAccessDuration'); duration = document.createElement('select'); duration.id = 'managed-duration';
+        const label = document.createElement('label'); label.className = 'managed-field'; label.htmlFor = 'managed-duration'; label.textContent = t('managedAccessDuration'); duration = document.createElement('select'); duration.id = 'managed-duration';
         for (const minutes of [1, 5, 15, 30, 60]) { const option = document.createElement('option'); option.value = String(minutes * 60); option.textContent = t('managedMinutes', { n: minutes }); duration.append(option); }
-        duration.value = '300'; duration.onchange = () => this.clearPasswords(); label.append(duration); fieldset.append(label);
+        duration.value = String((this.options.defaultUnlockMinutes?.() ?? 5) * 60); duration.onchange = () => this.clearPasswords(); label.append(duration); fieldset.append(label);
       }
       if (editor.kind === 'password') {
         fieldset.append(this.paragraph(t('managedPasswordRules')));
@@ -349,7 +363,7 @@ export class ManagedProtectionUi {
       }
     }
     const error = this.paragraph('', 'managed-editor-error'); error.id = 'managed-editor-error'; error.setAttribute('role', 'alert'); error.hidden = true; fieldset.append(error);
-    const actions = document.createElement('div'); actions.className = 'selection-actions'; const submit = this.button('managedConfirm', () => {}, true); submit.type = 'submit'; submit.dataset.managedAction = 'submit'; actions.append(submit, this.button('cancel', () => this.close())); fieldset.append(actions);
+    const actions = document.createElement('div'); actions.className = 'selection-actions managed-editor-actions'; const submit = this.button(editor.kind === 'enroll' ? 'managedConfirmEnrollment' : 'managedConfirm', () => {}, true); submit.type = 'submit'; submit.dataset.managedAction = 'submit'; actions.append(submit, this.button('cancel', () => this.close())); fieldset.append(actions);
     form.append(fieldset); this.container.append(form);
     form.onsubmit = event => {
       event.preventDefault(); if (this.options.isBlocked() || !this.available || this.stale) { this.clearPasswords(); return; }

@@ -2,13 +2,13 @@
 
 ## Windows 安装与便携版
 
-Windows 10/11 x64 需要 WebView2 Runtime。当前源码版本为 v0.9.1 预览版，公开下载与发布状态见 [v0.9.1 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.9.1)，本机构建产物位于 `artifacts/0.9.1/`；验证边界见[验证记录](VALIDATION.md)。安装包 `FoldSentinel_0.9.1_x64-setup.exe` 按当前用户安装，可选择简体中文或 English；安装器语言与应用“设置”中的界面语言独立。便携包 `FoldSentinel_0.9.1_windows-x64_portable.zip` 解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。
+Windows 10/11 x64 需要 WebView2 Runtime。当前版本为 v0.9.2 预览版（2026-11-07），安装包、便携包及校验和见 [v0.9.2 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.9.2)。正式发布以前置成功的同一源码提交 Windows CI 为门槛，Release 将附本次提交和 CI 链接。本版构建输出目录为 `artifacts/0.9.2/`，界面验证见 [UI 审核](UI_REVIEW.md)，其余验证边界见[验证记录](VALIDATION.md)。安装包 `FoldSentinel_0.9.2_x64-setup.exe` 按当前用户安装，可选择简体中文或 English；安装器语言与应用“设置”中的界面语言独立。便携包 `FoldSentinel_0.9.2_windows-x64_portable.zip` 解压后运行 `FoldSentinel.exe`，同目录的 `foldsentinel-cli.exe` 提供命令行入口。便携版仍把偏好和管理记录保存在当前 Windows 用户数据中，不是无痕模式。
 
 安装器默认不勾选“安装 SYSTEM 持续防护服务”。需要密码访问、到期重锁和后台防护时选择该项，服务部署阶段才请求 UAC；静默和被动安装不会自动安装服务。服务由主程序内置安装入口部署到固定 Program Files 目录，不依赖额外修补程序或 PowerShell。取消授权或失败会明确提示主程序已安装、服务未完成；取消 UAC 可重新运行安装器重试，复制后注册前失败留下的固定目录须先核查，不自动覆盖。已有兼容服务保留，不直接覆盖运行中的服务；不兼容或目录残留时须按[服务说明](SERVICE.md)处理，不能删除恢复资料来绕过检查。
 
-安装应用时未选择服务，可进入“文件保护 → SYSTEM 服务与密码访问”。确认未安装后，点击“安装服务”并允许 Windows 管理员授权；按钮旁说明服务会自动启动和后台运行。安装使用同目录随包服务及构建散列，不下载其他程序。等待期间禁用重复请求，结束后自动读取实际连接，只有验证通过才启用服务登记；取消授权或失败可以重试。浏览器预览不执行安装，服务状态未知或配置异常时先显示具体原因。
+安装应用时未选择服务，可进入“文件保护 → 密码与持续防护”页签。确认未安装后，点击“安装服务”并允许 Windows 管理员授权；按钮旁说明 SYSTEM 服务会自动启动和后台运行。安装使用同目录随包服务及构建散列，不下载其他程序。等待期间禁用重复请求，结束后自动读取实际连接，只有验证通过才启用服务登记；取消授权或失败可以重试。切回本地保护后暂停服务界面轮询并清除密码输入，后台服务本身继续运行。浏览器预览不执行安装，服务状态未知或配置异常时先显示具体原因。
 
-升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性、权限及最外层索引）、`vault-inventory.json`（加密资产和恢复位置）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。v1/v2 加密格式及 KDF 参数保持兼容，新建仍为 v2。升级不会自动转换或删除加密包。
+升级前结束队列并关闭旧窗口，保留 `%APPDATA%\FoldSentinel\state.json`（原始属性、权限及最外层索引）、`vault-inventory.json`（加密资产和恢复位置）、`jobs`（中断记录），以及 WebView2 用户数据。用新安装包覆盖安装，或把便携版解压到新的空目录；不要在运行中替换 exe。新建始终使用最新加密包格式，无需选择版本；旧包仅保留兼容读取，格式及 KDF 参数保持兼容，升级不会自动转换或删除加密包。技术格式约定见[格式说明](FORMAT.md)。
 
 语言、主题和最多 200 项任务描述保存在应用 WebView2 的 localStorage，键为 `foldsentinel.language`、`foldsentinel.theme` 与 `foldsentinel.history.v1`；用户数据目录由 WebView2/Tauri 管理。登录启动默认关闭；开启后仅登记当前账户的 Windows Run 项，卸载完成时会移除此产品项。历史包含本机路径，不含密码或密钥。等待 / 运行记录在重启后显示为中断，重新输入密码后可重试。应用中的“清空历史”只清除终态任务描述，保留等待和运行任务；不会删除源数据、加密包、属性恢复记录或中断任务临时数据。
 
@@ -56,8 +56,8 @@ Windows 10/11 x64 需要 WebView2 Runtime。当前源码版本为 v0.9.1 预览�
 同一 Release 下载安装包或便携 ZIP 和 `SHA256SUMS.txt`，在 PowerShell 中执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.1_x64-setup.exe
-Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.1_windows-x64_portable.zip
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.2_x64-setup.exe
+Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.2_windows-x64_portable.zip
 ```
 
 逐项比对名称与哈希，须与发布页及校验文件一致。SHA-256 用于检测下载内容变化，不等价于代码签名或独立安全审计。当前产物未签名。
@@ -66,4 +66,4 @@ Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.1_windows-x64_por
 
 使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.4 基线升级和卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。`validate-uninstall-hooks.ps1` 使用私有目录和夹具 helper 验证删除前拦截及返回码，`validate-service-uninstall.ps1` 使用函数替身核对服务脚本边界；这些隔离验证不能替代真实 UAC、SCM 删除、交互式强制确认或干净系统验收。
 
-正式交付使用 `./scripts/package.ps1`：先构建 CLI 与服务，再通过 `src-tauri/tauri.bundle.conf.json` 资源覆盖配置构建 GUI 与含服务的 NSIS，将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包。产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包本身不会在本机安装服务。脚本检查版本、ZIP内容、NSIS 服务资源与两个 SHA-256；独立校验用 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.9.1`。只运行 Tauri 默认构建不作为正式交付入口。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。
+正式交付使用 `./scripts/package.ps1`：先构建 CLI 与服务，再通过 `src-tauri/tauri.bundle.conf.json` 资源覆盖配置构建 GUI 与含服务的 NSIS，将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包。产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包本身不会在本机安装服务。脚本检查版本、ZIP内容、NSIS 服务资源与两个 SHA-256；独立校验用 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.9.2`。只运行 Tauri 默认构建不作为正式交付入口。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。

@@ -1,18 +1,23 @@
 //! FSEAL v1 的认证头部、固定 KDF 参数和边界见 docs/FORMAT.md。
+use super::crypto::{derive_key, validate_password};
+use super::paths::output_path;
+#[cfg(test)]
+use super::paths::{reject_link, validate_archive_path};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
-use anyhow::{Context, Result, bail, ensure};
-use argon2::{Algorithm, Argon2, Params, Version};
+use anyhow::{Context, Result, ensure};
 #[cfg(test)]
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
 #[cfg(test)]
 use std::collections::HashSet;
 #[cfg(test)]
-use std::fs::File;
-use std::fs::{self, OpenOptions};
+use std::fs;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 #[cfg(test)]
 use walkdir::WalkDir;
 use zeroize::Zeroizing;
@@ -86,20 +91,18 @@ pub fn encrypt_file(input: &Path, output: &Path, password: &str) -> Result<Vault
 /// 认证通过前不落盘明文；目录只恢复到新的位置。
 #[cfg(test)]
 pub fn decrypt_file(input: &Path, output: &Path, password: &str) -> Result<VaultReport> {
-    decode(input, Some(output), password, &super::Control::new(|_| {})?)
+    let mut file = super::open_stable(input)?;
+    decode_from_file(
+        &mut file,
+        Some(output),
+        password,
+        &super::Control::new(|_| {})?,
+        None,
+    )
 }
 
-pub(super) fn decode(
-    input: &Path,
-    output: Option<&Path>,
-    password: &str,
-    control: &super::Control,
-) -> Result<VaultReport> {
-    decode_with_preview(input, output, password, control, None)
-}
-
-pub(super) fn decode_with_preview(
-    input: &Path,
+pub(super) fn decode_from_file(
+    file: &mut File,
     output: Option<&Path>,
     password: &str,
     control: &super::Control,
@@ -108,7 +111,6 @@ pub(super) fn decode_with_preview(
     validate_password(password)?;
     let output = output.map(output_path).transpose()?;
     control.check()?;
-    let mut file = super::open_stable(input)?;
     let length = file.metadata()?.len();
     ensure!(
         length <= (MAX_PLAINTEXT + HEADER_LEN + TAG_LEN) as u64,
@@ -199,22 +201,6 @@ pub(super) fn decode_with_preview(
     })
 }
 
-pub(super) fn validate_password(password: &str) -> Result<()> {
-    ensure!(!password.is_empty(), "密码不能为空");
-    ensure!(password.len() <= 1024, "密码最多 1024 个 UTF-8 字节");
-    Ok(())
-}
-
-pub(super) fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    let params =
-        Params::new(19_456, 2, 1, Some(32)).map_err(|e| anyhow::anyhow!("KDF 参数错误: {e}"))?;
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        .hash_password_into(password.as_bytes(), salt, key.as_mut())
-        .map_err(|e| anyhow::anyhow!("密钥派生失败: {e}"))?;
-    Ok(key)
-}
-
 #[cfg(test)]
 fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
     let file = File::open(path).with_context(|| format!("打开文件失败: {}", path.display()))?;
@@ -227,22 +213,6 @@ fn read_limited(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-pub(super) fn output_path(path: &Path) -> Result<PathBuf> {
-    ensure!(path.file_name().is_some(), "请指定完整输出名称");
-    match fs::symlink_metadata(path) {
-        Ok(_) => bail!(super::ErrorCode::OutputExists),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).context("检查输出位置失败"),
-    }
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let parent = fs::canonicalize(parent).context("输出父目录不存在或无法访问")?;
-    ensure!(parent.is_dir(), "输出父路径不是目录");
-    Ok(parent.join(path.file_name().context("缺少输出名称")?))
-}
-
 #[cfg(test)]
 fn write_new_file(output: &Path, bytes: &[u8]) -> Result<()> {
     let mut temporary =
@@ -252,21 +222,6 @@ fn write_new_file(output: &Path, bytes: &[u8]) -> Result<()> {
     temporary
         .persist_noclobber(output)
         .map_err(|e| anyhow::anyhow!("提交恢复文件失败（不会覆盖已有数据）: {}", e.error))?;
-    Ok(())
-}
-
-pub(crate) fn reject_link(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).context("读取输入元数据失败")?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        ensure!(
-            metadata.file_attributes() & 0x400 == 0,
-            "首版不处理符号链接、目录联接或其他重解析点: {}",
-            path.display()
-        );
-    }
-    ensure!(!metadata.file_type().is_symlink(), "首版不处理符号链接");
     Ok(())
 }
 
@@ -317,33 +272,6 @@ fn pack_directory(root: &Path) -> Result<Zeroizing<Vec<u8>>> {
     Ok(archive.into_inner()?.0)
 }
 
-pub(super) fn validate_archive_path(path: &Path) -> Result<()> {
-    ensure!(!path.as_os_str().is_empty(), "归档路径为空");
-    for component in path.components() {
-        let Component::Normal(name) = component else {
-            bail!("加密包包含不安全的路径");
-        };
-        let name = name.to_str().context("首版不支持非 Unicode 文件名")?;
-        ensure!(
-            !name.ends_with(['.', ' '])
-                && !name
-                    .chars()
-                    .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c)),
-            "不支持的 Windows 文件名: {name}"
-        );
-        let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-        let reserved = [
-            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-        ];
-        ensure!(
-            !reserved.contains(&stem.as_str()),
-            "Windows 保留文件名: {name}"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 fn unpack_directory(bytes: &[u8], output: &Path) -> Result<()> {
     let staging = tempfile::tempdir_in(output.parent().context("缺少输出父目录")?)?;
@@ -383,7 +311,7 @@ fn move_new_directory(source: &Path, destination: &Path) -> Result<()> {
 }
 #[cfg(all(test, not(windows)))]
 fn move_new_directory(_source: &Path, _destination: &Path) -> Result<()> {
-    bail!("首版仅支持在 Windows 恢复文件夹")
+    anyhow::bail!("首版仅支持在 Windows 恢复文件夹")
 }
 
 #[cfg(test)]

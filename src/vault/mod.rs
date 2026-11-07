@@ -1,8 +1,11 @@
 mod control;
+mod crypto;
 mod error;
 pub mod inventory;
 mod legacy;
+mod paths;
 mod preview;
+mod reader;
 pub mod recovery;
 mod space;
 mod stream;
@@ -11,16 +14,17 @@ pub mod workflow;
 use anyhow::{Context, Result, ensure};
 pub use control::{Control, Progress};
 pub use error::{ErrorCode, error_code};
-pub(crate) use legacy::reject_link;
+pub(crate) use paths::reject_link;
 pub use preview::{MAX_PREVIEW_ENTRIES, PackagePreview, PreviewEntry, VaultInspection};
 use rand::{RngCore, rngs::OsRng};
+use reader::PackageReader;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use stream::{DecryptReader, EncryptWriter, HEADER_LEN, MAGIC};
+use stream::{EncryptWriter, HEADER_LEN, MAGIC};
 use walkdir::WalkDir;
 
 const MAX_CONTENT: u64 = 1024 * 1024 * 1024 * 1024;
@@ -68,67 +72,18 @@ fn verify_content(
     input: &Path,
     password: &str,
     control: &Control,
-    mut preview: Option<&mut preview::PreviewBuilder>,
+    preview: Option<&mut preview::PreviewBuilder>,
 ) -> Result<(VaultReport, u8)> {
-    legacy::validate_password(password)?;
+    crypto::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
     let input = fs::canonicalize(input)?;
-    let mut source = open_stable(&input)?;
-    let wire_size = source.metadata()?.len();
-    let mut magic = [0; 8];
-    source.read_exact(&mut magic)?;
-    if &magic == b"FSEAL001" {
-        let report = legacy::decode_with_preview(&input, None, password, control, preview)?;
-        control.check()?;
-        control.begin_commit()?;
-        control.phase("completed", "");
-        return Ok((
-            VaultReport {
-                input_bytes: report.input_bytes as u64,
-                output_bytes: report.output_bytes as u64,
-                directory: report.directory,
-            },
-            1,
-        ));
-    }
-    ensure!(&magic == MAGIC, ErrorCode::UnsupportedFormat);
-    let mut header = [0; HEADER_LEN];
-    header[..8].copy_from_slice(&magic);
-    source.read_exact(&mut header[8..])?;
-    let size = u64::from_le_bytes(header[34..42].try_into()?);
-    let entries = u32::from_le_bytes(header[42..46].try_into()?) as usize;
-    ensure!(
-        size <= MAX_CONTENT && entries <= MAX_ENTRIES && (header[9] != 0 || entries == 0),
-        ErrorCode::InvalidPackage
-    );
-    control.total(wire_size);
-    control.phase("deriving", "");
-    let mut stream = DecryptReader::new(source, password, header, control.clone())?;
-    control.advance(HEADER_LEN as u64);
-    control.phase("checking", "");
-    let directory = header[9] == 1;
-    if directory {
-        process_directory(&mut stream, None, Some((size, entries)), control, preview)
-            .context(ErrorCode::InvalidPackage)?;
-    } else {
-        let copied = std::io::copy(&mut stream.by_ref().take(size + 1), &mut std::io::sink())?;
-        ensure!(copied == size, ErrorCode::InvalidPackage);
-        if let Some(preview) = preview.as_mut() {
-            preview.record(None, false, size);
-        }
-    }
+    let mut package = PackageReader::open(&input)?;
+    let result = package.decode(None, password, control, preview)?;
     control.check()?;
     control.begin_commit()?;
     control.phase("completed", "");
-    Ok((
-        VaultReport {
-            input_bytes: wire_size,
-            output_bytes: size,
-            directory,
-        },
-        2,
-    ))
+    Ok(result)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -154,7 +109,7 @@ fn scan(root: &Path, control: &Control) -> Result<Vec<Item>> {
             "不支持特殊文件"
         );
         let relative = entry.path().strip_prefix(root)?.to_path_buf();
-        legacy::validate_archive_path(&relative)?;
+        paths::validate_archive_path(&relative)?;
         let name = relative.to_str().context("非 Unicode 路径不受支持")?;
         names += name.len();
         ensure!(
@@ -251,11 +206,11 @@ pub fn encrypt_with_control(
 ) -> Result<VaultReport> {
     let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
     let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
-    legacy::validate_password(password)?;
+    crypto::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
     let input = fs::canonicalize(input)?;
-    let output = legacy::output_path(output)?;
+    let output = paths::output_path(output)?;
     ensure!(
         !PathBuf::from(output.to_string_lossy().to_lowercase())
             .starts_with(PathBuf::from(input.to_string_lossy().to_lowercase())),
@@ -403,76 +358,21 @@ pub fn decrypt_with_control(
 ) -> Result<VaultReport> {
     let data_dir = control.recovery_dir.parent().context("缺少用户数据目录")?;
     let _guard = crate::lifecycle::OperationGuard::acquire(data_dir)?;
-    legacy::validate_password(password)?;
+    crypto::validate_password(password)?;
     control.check()?;
     reject_link(input)?;
     let input = fs::canonicalize(input)?;
-    let output = legacy::output_path(output)?;
+    let output = paths::output_path(output)?;
     let fingerprint = inventory::observe(data_dir, &input)?;
-    let mut source = open_stable(&input)?;
-    let wire_size = source.metadata()?.len();
-    let mut magic = [0; 8];
-    source.read_exact(&mut magic)?;
+    let mut package = PackageReader::open(&input)?;
     let job = recovery::Job::create(&input, &output, true, &control.recovery_dir)?;
     let result = (|| {
-        if &magic == b"FSEAL001" {
-            control.phase("legacy", "");
-            let report = legacy::decode(&input, Some(&job.payload()), password, control)?;
-            control.check()?;
-            control.begin_commit()?;
-            commit(&job.payload(), &output)?;
-            inventory::mark_restored(data_dir, &fingerprint, &input, &output)?;
-            return Ok(VaultReport {
-                input_bytes: report.input_bytes as u64,
-                output_bytes: report.output_bytes as u64,
-                directory: report.directory,
-            });
-        }
-        ensure!(&magic == MAGIC, ErrorCode::UnsupportedFormat);
-        let mut header = [0; HEADER_LEN];
-        header[..8].copy_from_slice(&magic);
-        source.read_exact(&mut header[8..])?;
-        let size = u64::from_le_bytes(header[34..42].try_into()?);
-        let entries = u32::from_le_bytes(header[42..46].try_into()?) as usize;
-        ensure!(
-            size <= MAX_CONTENT && entries <= MAX_ENTRIES && (header[9] != 0 || entries == 0),
-            ErrorCode::InvalidPackage
-        );
-        control.total(wire_size);
-        control.phase("deriving", "");
-        let mut stream = DecryptReader::new(source, password, header, control.clone())?;
-        space::preflight(&output, size.saturating_add(entries as u64 * 4096))?;
-        control.advance(HEADER_LEN as u64);
-        control.phase("decrypting", "");
-        let directory = header[9] == 1;
-        if directory {
-            process_directory(
-                &mut stream,
-                Some(&job.payload()),
-                Some((size, entries)),
-                control,
-                None,
-            )
-            .context(ErrorCode::InvalidPackage)?;
-        } else {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(job.payload())
-                .context(ErrorCode::WriteFailed)?;
-            let copied = copy_to_file(&mut stream.by_ref().take(size + 1), &mut file)?;
-            ensure!(copied == size, ErrorCode::InvalidPackage);
-            control.phase("syncing", "");
-            file.sync_all().context(ErrorCode::WriteFailed)?;
-        }
+        let (report, _) = package.decode(Some(&job.payload()), password, control, None)?;
+        control.check()?;
         control.begin_commit()?;
         commit(&job.payload(), &output)?;
         inventory::mark_restored(data_dir, &fingerprint, &input, &output)?;
-        Ok(VaultReport {
-            input_bytes: wire_size,
-            output_bytes: size,
-            directory,
-        })
+        Ok(report)
     })();
     let report = job.conclude(result)?;
     control.phase("completed", "");
@@ -540,7 +440,7 @@ fn process_directory(
         } else {
             entry.path()?.into_owned()
         };
-        legacy::validate_archive_path(&relative)?;
+        paths::validate_archive_path(&relative)?;
         let name = relative.to_str().context("归档包含非 Unicode 路径")?;
         names += name.len();
         ensure!(name.len() <= 4096 && names <= MAX_NAMES, "归档路径超限");

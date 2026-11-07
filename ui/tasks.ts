@@ -1,7 +1,9 @@
+import { DEFAULT_PREFERENCES, type HistoryPreferences } from './preferences.ts';
+
 export type Operation = 'encrypt' | 'decrypt' | 'verify';
 export type TaskStatus = 'waiting' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
 export interface Plan { input: string; output: string | null; operation: Operation }
-export interface Task extends Plan { id: string; status: TaskStatus; createdAt: number; endedAt?: number; code?: string; batchId?: string }
+export interface Task extends Plan { id: string; status: TaskStatus; createdAt: number; endedAt?: number; code?: string; batchId?: string; pathsHidden?: true }
 export interface Progress { phase: string; completed: number; total: number; current: string }
 export interface VaultReport { input_bytes: number; output_bytes: number; directory: boolean; preview?: import('./preview').PackagePreview }
 export const HISTORY_KEY = 'foldsentinel.history.v1';
@@ -67,6 +69,7 @@ export function loadHistory(raw: string | null): Task[] {
       !statuses.includes(task.status) || !Number.isFinite(task.createdAt) ||
       (task.endedAt !== undefined && !Number.isFinite(task.endedAt)) ||
       (task.code !== undefined && typeof task.code !== 'string') ||
+      (task.pathsHidden !== undefined && (task.pathsHidden !== true || task.input !== '' || task.output !== null || ['waiting', 'running'].includes(task.status))) ||
       (task.batchId !== undefined && (typeof task.batchId !== 'string' || task.batchId.length > 100))) throw new Error('history_invalid');
     ids.add(task.id);
     return { ...descriptor(task), status: ['waiting', 'running'].includes(task.status) ? 'interrupted' : task.status };
@@ -76,18 +79,39 @@ export function loadHistory(raw: string | null): Task[] {
 // 白名单序列化；密码从不属于 Task，也不会通过对象展开进入历史。
 function descriptor(task: Task): Task {
   return { id: task.id, input: task.input, output: task.output, operation: task.operation,
-    status: task.status, createdAt: task.createdAt, endedAt: task.endedAt, code: task.code, batchId: task.batchId };
+    status: task.status, createdAt: task.createdAt, endedAt: task.endedAt, code: task.code, batchId: task.batchId,
+    ...(task.pathsHidden ? { pathsHidden: true as const } : {}) };
 }
-export function serializeHistory(tasks: Task[]): string { return JSON.stringify(tasks.map(descriptor)); }
+export function canRetryTask(task: Task): boolean { return !task.pathsHidden && task.input.trim().length > 0; }
+
+// 保留队列所需路径；保留期限和匿名化只作用于完成、失败、取消与中断的操作历史。
+export function filterHistory(tasks: readonly Task[], preferences: HistoryPreferences, now = Date.now()): Task[] {
+  if (![0, 7, 30, 90].includes(preferences.historyRetentionDays) || typeof preferences.historyPaths !== 'boolean' || !Number.isFinite(now)) throw new Error('preferences_invalid');
+  const cutoff = now - preferences.historyRetentionDays * 24 * 60 * 60 * 1000;
+  return tasks.flatMap(task => {
+    if (['waiting', 'running'].includes(task.status)) return [task];
+    if (preferences.historyRetentionDays !== 0 && (task.endedAt ?? task.createdAt) < cutoff) return [];
+    if (!preferences.historyPaths && !task.pathsHidden) return [{ ...descriptor(task), input: '', output: null, pathsHidden: true as const }];
+    return [task];
+  });
+}
+export function serializeHistory(tasks: readonly Task[], preferences: HistoryPreferences = DEFAULT_PREFERENCES, now = Date.now()): string {
+  return JSON.stringify(filterHistory(tasks, preferences, now).map(descriptor));
+}
 
 export class TaskQueue {
   tasks: Task[];
   running = false;
   private paused = false;
   private secrets = new Map<string, string>();
-  constructor(tasks: Task[], private save: (tasks: Task[]) => void, private changed: () => void) { this.tasks = tasks; }
+  constructor(tasks: Task[], private save: (tasks: Task[]) => void, private changed: () => void, private historyPreferences: () => HistoryPreferences = () => DEFAULT_PREFERENCES) { this.tasks = tasks; }
+  private persist(tasks: Task[]): Task[] {
+    const next = filterHistory(tasks, this.historyPreferences());
+    this.save(next); return next;
+  }
   get pauseRequested(): boolean { return this.paused; }
   add(plans: Plan[], password: string): void {
+    if (plans.some(plan => !plan.input.trim())) throw new Error('task_path_unavailable');
     if (!password || !plans.length || this.tasks.filter(t => ['waiting', 'running'].includes(t.status)).length + plans.length > 100) throw new Error('queue_limit');
     const batchId = crypto.randomUUID();
     const createdAt = Date.now();
@@ -95,8 +119,7 @@ export class TaskQueue {
     const pending = this.tasks.filter(t => ['waiting', 'running'].includes(t.status));
     const history = this.tasks.filter(t => !['waiting', 'running'].includes(t.status)).slice(-(200 - pending.length - added.length));
     const next = [...history, ...pending, ...added];
-    this.save(next);
-    this.tasks = next;
+    this.tasks = this.persist(next);
     added.forEach(t => this.secrets.set(t.id, password));
     this.changed();
   }
@@ -105,14 +128,24 @@ export class TaskQueue {
     if (!task) return;
     const endedAt = Date.now();
     const next = this.tasks.map(item => item === task ? { ...item, status: 'cancelled' as const, endedAt } : item);
-    this.save(next);
-    task.status = 'cancelled'; task.endedAt = endedAt; this.secrets.delete(id);
+    this.tasks = this.persist(next);
+    this.secrets.delete(id);
     this.changed();
   }
   pause(): void { this.paused = true; this.changed(); }
   clearHistory(): void {
     const next = this.tasks.filter(t => ['waiting', 'running'].includes(t.status));
+    this.tasks = this.persist(next); this.changed();
+  }
+  applyHistoryPreferences(preferences: HistoryPreferences, now = Date.now()): void {
+    const next = filterHistory(this.tasks, preferences, now);
     this.save(next); this.tasks = next; this.changed();
+  }
+  pruneHistory(days: HistoryPreferences['historyRetentionDays'], now = Date.now()): void {
+    this.applyHistoryPreferences({ ...this.historyPreferences(), historyRetentionDays: days }, now);
+  }
+  anonymizeHistory(): void {
+    this.applyHistoryPreferences({ ...this.historyPreferences(), historyPaths: false });
   }
   async start(perform: (task: Task, password: string) => Promise<unknown>, errorCode: (error: unknown) => string): Promise<void> {
     if (this.running) return;
@@ -122,15 +155,15 @@ export class TaskQueue {
         const task = this.tasks.find(t => t.status === 'waiting');
         if (!task) break;
         const password = this.secrets.get(task.id);
-        if (!password) { task.status = 'interrupted'; this.save(this.tasks); this.changed(); continue; }
+        if (!password) { task.status = 'interrupted'; this.tasks = this.persist(this.tasks); this.changed(); continue; }
         task.status = 'running';
         // 先持久化运行状态，失败时不会启动无记录的文件操作。
-        try { this.save(this.tasks); } catch (error) { task.status = 'waiting'; throw error; }
+        try { this.tasks = this.persist(this.tasks); } catch (error) { task.status = 'waiting'; throw error; }
         this.changed();
         try { await perform(task, password); task.status = 'succeeded'; }
         catch (error) { task.code = errorCode(error); task.status = task.code === 'cancelled' ? 'cancelled' : 'failed'; }
         finally { this.secrets.delete(task.id); task.endedAt = Date.now(); }
-        this.save(this.tasks); this.changed();
+        this.tasks = this.persist(this.tasks); this.changed();
       }
     } finally { this.running = false; this.changed(); }
   }

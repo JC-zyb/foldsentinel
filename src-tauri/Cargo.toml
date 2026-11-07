@@ -1,6 +1,6 @@
 [package]
 name = "foldsentinel-desktop"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 license = "MIT"
 default-run = "FoldSentinel"
@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 sha2 = "0.10"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 foldsentinel = { path = ".." }
 serde = { version = "1", features = ["derive"] }

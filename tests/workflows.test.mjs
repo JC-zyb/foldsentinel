@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskQueue, MAX_SOURCES, batchSummary, inspectSources, loadHistory, mergeSourcePaths, outputParent, serializeHistory } from '../ui/tasks.ts';
+import { TaskQueue, MAX_SOURCES, batchSummary, canRetryTask, filterHistory, inspectSources, loadHistory, mergeSourcePaths, outputParent, serializeHistory } from '../ui/tasks.ts';
+import { DEFAULT_PREFERENCES, loadPreferences, serializePreferences } from '../ui/preferences.ts';
 import { detectLanguage, messages } from '../ui/i18n.ts';
 import { previewPage, PREVIEW_PAGE_SIZE } from '../ui/preview.ts';
 import { ProtectionRecords, runProtectionAction, runProtectionBatch, validProtectionNote } from '../ui/protection-workflow.ts';
@@ -114,6 +115,85 @@ test('persistence errors prevent execution and history ignores unexpected secret
   const raw = JSON.stringify([{ ...queue.tasks[0], password: 'hidden-secret', key: 'hidden-key' }]);
   assert.equal(serializeHistory(loadHistory(raw)).includes('hidden-'), false);
   assert.throws(() => loadHistory('{bad'));
+});
+
+test('preferences validate persisted values and whitelist fields while migrating missing options', () => {
+  assert.deepEqual(loadPreferences(null), DEFAULT_PREFERENCES);
+  assert.deepEqual(loadPreferences('{}'), DEFAULT_PREFERENCES);
+  assert.deepEqual(loadPreferences('{"density":"compact"}'), { ...DEFAULT_PREFERENCES, density: 'compact' });
+  const changed = { ...DEFAULT_PREFERENCES, notification: 'failures', historyRetentionDays: 30, historyPaths: false,
+    defaultProtectionMode: 'readonly-acl', defaultUnlockMinutes: 15, defaultOutputDirectory: 'D:\\新目录', fontSize: 'large' };
+  assert.deepEqual(loadPreferences(serializePreferences(changed)), changed);
+  assert.equal(serializePreferences({ ...changed, password: 'not-a-preference', input: 'private-file' }).includes('not-a-preference'), false);
+  for (const raw of ['[]', 'null', 'false', '', '{bad', '{"notification":"always"}', '{"historyRetentionDays":1}', '{"historyPaths":"false"}',
+    '{"defaultProtectionMode":"invalid"}', '{"defaultUnlockMinutes":0}', '{"defaultOutputDirectory":7}', '{"defaultOutputDirectory":"bad\\npath"}',
+    '{"density":"tiny"}', '{"fontSize":"huge"}']) assert.throws(() => loadPreferences(raw), undefined, raw);
+});
+
+test('retention only removes expired terminal history and measures completed records from end time', () => {
+  const day = 24 * 60 * 60 * 1000, now = 100 * day;
+  const record = (id, status, age, endedAt) => ({ id, input: `${id}-source`, output: `${id}-output`, operation: 'encrypt', status, createdAt: now - age * day, endedAt });
+  const waiting = record('waiting', 'waiting', 100), running = record('running', 'running', 100);
+  const completedRecently = record('recent-end', 'succeeded', 99, now - day);
+  const boundary = record('boundary', 'failed', 7);
+  const old = ['succeeded', 'failed', 'cancelled', 'interrupted'].map(status => record(`old-${status}`, status, 8));
+  const tasks = [waiting, running, completedRecently, boundary, ...old];
+  const filtered = filterHistory(tasks, { historyRetentionDays: 7, historyPaths: true }, now);
+  assert.deepEqual(filtered, [waiting, running, completedRecently, boundary]);
+  assert.equal(filtered[0], waiting, '等待任务保留对象身份与执行路径');
+  assert.equal(filtered[1], running, '运行任务保留对象身份，异步结果仍写入同一任务');
+  assert.equal(tasks.length, 8, '纯过滤不改变原历史');
+  assert.deepEqual(filterHistory(tasks, DEFAULT_PREFERENCES, now), tasks);
+  assert.throws(() => filterHistory(tasks, { historyRetentionDays: -1, historyPaths: true }), /preferences_invalid/);
+});
+
+test('path privacy removes both paths from terminal records and anonymous history cannot retry', () => {
+  const tasks = ['waiting', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'].map((status, index) => ({
+    id: `private-${index}`, input: `private-input-${index}`, output: `private-output-${index}`, operation: 'encrypt', status, createdAt: 1, batchId: 'batch',
+  }));
+  const policy = { historyRetentionDays: 0, historyPaths: false };
+  const filtered = filterHistory(tasks, policy);
+  assert.deepEqual(filtered.slice(0, 2), tasks.slice(0, 2), '排队与运行记录仍可用于重启诊断');
+  for (const task of filtered.slice(2)) {
+    assert.equal(task.input, ''); assert.equal(task.output, null); assert.equal(task.pathsHidden, true);
+    assert.equal(canRetryTask(task), false);
+  }
+  assert.equal(tasks[2].input, 'private-input-2', '不改变调用者的旧快照');
+  const saved = serializeHistory(tasks, policy);
+  assert.equal(saved.includes('private-input-2'), false); assert.equal(saved.includes('private-output-2'), false);
+  const loaded = loadHistory(saved);
+  assert.deepEqual(loaded.slice(2), filtered.slice(2));
+  assert.equal(canRetryTask(loaded[2]), false);
+  assert.equal(canRetryTask({ ...tasks[2], input: '' }), false, '旧空路径记录也不能作为重试来源');
+  assert.equal(filterHistory(loaded, DEFAULT_PREFERENCES)[2].pathsHidden, true, '重新开启路径保存不能恢复已经删除的路径');
+  assert.throws(() => loadHistory(JSON.stringify([{ ...filtered[2], status: 'waiting' }])), /history_invalid/);
+  assert.throws(() => loadHistory(JSON.stringify([{ ...filtered[2], input: 'unexpected-path' }])), /history_invalid/);
+  const queue = new TaskQueue([], () => {}, () => {});
+  assert.throws(() => queue.add([{ input: '', output: null, operation: 'verify' }], 'secret'), /task_path_unavailable/);
+});
+
+test('history settings save before replacing memory and future completions follow current privacy', async () => {
+  let policy = { historyRetentionDays: 0, historyPaths: true }, fail = false, saved = '';
+  const old = { id: 'old', input: 'private-old-input', output: 'private-old-output', operation: 'encrypt', status: 'succeeded', createdAt: 1 };
+  const queue = new TaskQueue([old], tasks => { if (fail) throw new Error('storage_failed'); saved = serializeHistory(tasks); }, () => {}, () => policy);
+  fail = true;
+  assert.throws(() => queue.anonymizeHistory(), /storage_failed/);
+  assert.equal(queue.tasks[0], old); assert.equal(queue.tasks[0].input, 'private-old-input');
+  assert.throws(() => queue.pruneHistory(7), /storage_failed/);
+  assert.equal(queue.tasks.length, 1);
+  fail = false; policy = { historyRetentionDays: 0, historyPaths: false };
+  queue.applyHistoryPreferences(policy);
+  assert.equal(queue.tasks[0].pathsHidden, true); assert.equal(saved.includes('private-old-input'), false);
+  queue.add([{ input: 'private-current-input', output: 'private-current-output', operation: 'encrypt' }], 'secret');
+  await queue.start(async task => {
+    assert.equal(task.input, 'private-current-input');
+    assert.equal(saved.includes('private-current-input'), true, '任务完成前仍保存必要执行描述');
+    queue.applyHistoryPreferences(policy);
+  }, () => 'internal');
+  assert.equal(queue.tasks[1].status, 'succeeded'); assert.equal(queue.tasks[1].pathsHidden, true);
+  assert.equal(saved.includes('private-current-input'), false); assert.equal(saved.includes('private-current-output'), false);
+  queue.pruneHistory(7);
+  assert.equal(queue.tasks.length, 1); assert.equal(queue.tasks[0].status, 'succeeded');
 });
 
 test('language selection and interpolation contracts match in both catalogs', () => {

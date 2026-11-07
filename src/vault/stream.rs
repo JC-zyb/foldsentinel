@@ -1,4 +1,4 @@
-use super::{Control, ErrorCode, legacy};
+use super::{Control, ErrorCode, crypto};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{
     KeyInit, Payload,
@@ -15,7 +15,7 @@ pub(crate) const MAGIC: &[u8; 8] = b"FSEAL002";
 const LAST: u32 = 1 << 31;
 
 fn cipher(password: &str, header: &[u8; HEADER_LEN]) -> Result<Aes256Gcm> {
-    let key = legacy::derive_key(password, &header[10..26])?;
+    let key = crypto::derive_key(password, &header[10..26])?;
     Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| anyhow::anyhow!("初始化加密流失败"))
 }
 
