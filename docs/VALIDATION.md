@@ -8,6 +8,8 @@
 
 最终本机 `cargo test --workspace --locked` 通过 151 项，1 项真实 GitHub 网络测试默认忽略；`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` 及 `git diff --check` 通过。前端 `npm test` 22 项及 `npm run build` 通过。加密包布局专项 89 组通过，覆盖 375/720/960/961/1080/1440px、中英、明暗、较大字号与紧凑间距、单双提醒、字段显示、模式和语言切换、长路径及键盘折叠；生成 8 张代表截图。动态状态 14 组通过，覆盖开始、取消、暂停反馈与继续。报告为 `work/vault-layout-20261107/final/report.json` 和 `work/vault-layout-20261107/states-final.json`。
 
+首次 [Windows CI 42356499109](https://github.com/JC-zyb/foldsentinel/actions/runs/42356499109) 在下载 v0.4.0 基线安装器时返回 404，产品安装、升级与卸载 smoke 尚未开始；核对发现该 Release 已不存在。升级基线改为上一公开版 v0.9.1，并继续固定版本及 SHA-256 `964a7cad2f1653df13a64ab990888885ae78ace06e2740eef328a0d640489f71`；公开链接实际下载、该版 `SHA256SUMS.txt` 与 GitHub 资产 digest 三者一致。修复不跳过下载或散列检查，也不将缺失基线当作测试成功；本轮覆盖目标为从 v0.9.1 升级，不宣称 v0.4 升级已验收，历史报告仍只代表各自记录的版本和提交。
+
 浏览器验证使用生产渲染与事件处理器，恢复提示和预览使用明确的内存展示元数据，不连接原生 IPC 或执行文件操作。本轮未重新验收原生加密与恢复、真实 UAC/SCM 安装删除、旧状态恢复、第二账户、整机重启、Windows 原生多档 DPI、读屏或缺少 WebView2 的干净系统；历史版本的 SYSTEM/安装报告不作为本版证据。本节不声明远程 CI 已通过。正式发布须先取得本次源码提交的 Windows CI 成功结果，再使用同一提交生成的安装器、便携 ZIP 和 `SHA256SUMS.txt`；[v0.9.2 发布页](https://github.com/JC-zyb/foldsentinel/releases/tag/v0.9.2)将附对应提交与 CI 链接。
 
 ## v0.9.1 服务部署、状态与完整安装包 — 2026-11-05（本机验证）

@@ -20,9 +20,11 @@ $shortcuts = @(
 )
 foreach ($shortcut in $shortcuts) { if (Test-Path -LiteralPath $shortcut) { throw "runner 已存在产品快捷方式，拒绝覆盖：$shortcut" } }
 New-Item -ItemType Directory -Path $owned | Out-Null
-$oldInstaller = Join-Path $owned 'FoldSentinel_0.4.0_x64-setup.exe'
-Invoke-WebRequest -Uri 'https://github.com/JC-zyb/foldsentinel/releases/download/v0.4.0/FoldSentinel_0.4.0_x64-setup.exe' -OutFile $oldInstaller
-if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne '0a8a5f8bc796b0ace914254bb298e645c14b5a71d6e313e80366ff288d15de36') { throw 'v0.4.0 基线安装包 SHA-256 不符' }
+$baselineVersion = '0.9.1'
+$baselineSha256 = '964a7cad2f1653df13a64ab990888885ae78ace06e2740eef328a0d640489f71'
+$oldInstaller = Join-Path $owned "FoldSentinel_${baselineVersion}_x64-setup.exe"
+Invoke-WebRequest -Uri "https://github.com/JC-zyb/foldsentinel/releases/download/v$baselineVersion/FoldSentinel_${baselineVersion}_x64-setup.exe" -OutFile $oldInstaller
+if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $baselineSha256) { throw "v$baselineVersion 基线安装包 SHA-256 不符" }
 
 function Run-Installer([string]$Path, [string]$Arguments, [int]$ExpectedExit = 0) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -WindowStyle Hidden -PassThru
@@ -53,7 +55,7 @@ function Assert-InstalledFootprint([string]$ExpectedVersion) {
     foreach ($name in @('FoldSentinel.exe', 'uninstall.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $install $name) -PathType Leaf)) { throw "安装文件缺失：$name" }
     }
-    # v0.4 基线不含服务 payload；当前安装版即使未选择服务也必须携带组件。
+    # 当前安装版即使未选择服务也必须携带组件。
     if ($ExpectedVersion -eq $version -and -not (Test-Path -LiteralPath (Join-Path $install 'foldsentinel-service.exe') -PathType Leaf)) { throw '当前安装包缺少服务 payload' }
     $registration = Get-ItemProperty -LiteralPath $registry -ErrorAction Stop
     if ($registration.DisplayVersion -ne $ExpectedVersion -or $registration.UninstallString -ne ('"{0}"' -f (Join-Path $install 'uninstall.exe'))) { throw '卸载登记版本或路径错误' }
@@ -108,7 +110,7 @@ Start-Smoke $version
 Run-Uninstaller
 Assert-UninstalledFootprint
 Run-Installer $oldInstaller "/S /D=$install"
-Start-Smoke '0.4.0'
+Start-Smoke $baselineVersion
 $markers = @(
     (Join-Path $env:APPDATA 'FoldSentinel\v08-upgrade-sentinel.txt'),
     (Join-Path $env:APPDATA 'FoldSentinel\jobs\v08-upgrade-sentinel.txt'),
@@ -138,7 +140,7 @@ foreach ($marker in $markers) {
 Run-Uninstaller
 Assert-UninstalledFootprint
 $result = [ordered]@{
-    schema_version = 2; version = $version; baseline = '0.4.0'; passed = $true
+    schema_version = 2; version = $version; baseline = $baselineVersion; passed = $true
     checks = @('baseline_hash', 'install_current', 'current_service_payload_present', 'uninstall_service_payload_removed', 'uninstall_registration_and_shortcuts', 'webview_process_current_fresh', 'uninstall_current_fresh', 'install_baseline', 'webview_process_baseline', 'upgrade', 'webview_process_current', 'upgrade_sentinels_retained', 'silent_uninstall_rejects_unknown_metadata_before_removal', 'blocked_uninstall_retains_registration_shortcuts_and_sentinels', 'normal_uninstall_removes_program_directory_registration_shortcuts_and_known_preferences')
     limitations = @('WebView2 child-process creation is a process smoke check, not interactive UI validation.', 'Sentinels check upgrade retention and unknown-metadata gating, not stored preferences or history semantics.', 'This disposable runner does not install the optional SYSTEM service; real service removal requires separate acceptance.', 'Runner has WebView2; missing-runtime and clean Windows VM checks remain separate.')
 }

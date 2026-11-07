@@ -64,6 +64,6 @@ Get-FileHash -Algorithm SHA256 -LiteralPath .\FoldSentinel_0.9.2_windows-x64_por
 
 ## 可重现的发布流程
 
-使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.4 基线升级和卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。`validate-uninstall-hooks.ps1` 使用私有目录和夹具 helper 验证删除前拦截及返回码，`validate-service-uninstall.ps1` 使用函数替身核对服务脚本边界；这些隔离验证不能替代真实 UAC、SCM 删除、交互式强制确认或干净系统验收。
+使用锁定依赖安装 `npm ci`，运行 `npm run check:versions`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo test --workspace --locked` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。Windows CI 执行相同检查、真实 IO/隔离卷写满，以及安装、固定 SHA-256 的 v0.9.1 基线升级和卸载检查；调用 `scripts/package.ps1` 生成两个包及校验和。`validate-uninstall-hooks.ps1` 使用私有目录和夹具 helper 验证删除前拦截及返回码，`validate-service-uninstall.ps1` 使用函数替身核对服务脚本边界；这些隔离验证不能替代真实 UAC、SCM 删除、交互式强制确认或干净系统验收。
 
 正式交付使用 `./scripts/package.ps1`：先构建 CLI 与服务，再通过 `src-tauri/tauri.bundle.conf.json` 资源覆盖配置构建 GUI 与含服务的 NSIS，将服务管理脚本、README、LICENSE、CHANGELOG和docs打入便携包。产物位于 `artifacts/<版本>/`，保留其他版本。便携包的服务程序和 `manage-protection-service.ps1` 在根目录；源码脚本位于 `scripts/`。打包本身不会在本机安装服务。脚本检查版本、ZIP内容、NSIS 服务资源与两个 SHA-256；独立校验用 `./scripts/verify-artifacts.ps1 -Directory ./artifacts/0.9.2`。只运行 Tauri 默认构建不作为正式交付入口。版本须在Cargo、npm、锁文件、tauri.conf.json与界面中一致。发布前验证双语完整流程、重启偏好和历史、取消与恢复；提交版本、等待对应提交的Windows CI成功，再将同一提交打版本标签并发布产物。记录实际验证与已知限制，不把旧提交的CI当作当前版本证据。
